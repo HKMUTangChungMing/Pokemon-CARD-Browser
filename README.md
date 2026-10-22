@@ -1,3 +1,4 @@
 # Pokemon-CARD-Browser
 
-https://i.meee.com.tw/NUPJvLz.gif
+
+![ScreenGif.gif](https://i.meee.com.tw/NUPJvLz.gif)
