@@ -1,7 +1,9 @@
 # Pokemon-CARD-Browser
 
 
-<img width="1224" height="552" alt="ScreenGif" src="https://github.com/user-attachments/assets/7f87c65b-ffce-43bd-b8bf-7f22db82400d" />
+
+<img width="750" height="338" alt="2342342432" src="https://github.com/user-attachments/assets/3760fd1f-1ab2-4a4b-b2f2-93fa3564da4c" />
+
 
 <img width="1224" height="552" alt="ScreenGif" src="https://github.com/user-attachments/assets/6bf01877-dfa9-4a0d-8a41-3008770513a5" />
 
