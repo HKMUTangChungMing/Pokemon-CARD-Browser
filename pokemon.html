@@ -1,0 +1,2296 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>3D 寶可夢卡牌 360° 互動展示</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- FontAwesome for icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+    
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    body {
+      font-family: 'Noto Sans TC', 'Plus Jakarta Sans', sans-serif;
+      overflow: hidden;
+      touch-action: none;
+      background: radial-gradient(circle at 50% 45%, #181528 0%, #0d0c18 60%, #05050a 100%);
+    }
+
+    /* Holographic glassmorphism UI */
+    .glass-panel {
+      background: rgba(18, 20, 32, 0.78);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+
+    .glass-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .glass-btn:hover {
+      background: rgba(255, 255, 255, 0.18);
+      border-color: rgba(255, 215, 0, 0.5);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(250, 204, 21, 0.25);
+    }
+
+    .nav-btn { transition: scale 0.2s ease, background 0.2s ease; }
+
+    /* Edge-aware UI: slides out toward its edge when the pointer is near the centre */
+    body .ui-edge {
+      transition: translate 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease, scale 0.2s ease,
+                  transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    body.ui-hidden .ui-edge { opacity: 0; pointer-events: none !important; }
+    body.ui-hidden .ui-edge * { pointer-events: none !important; }
+    body.ui-hidden .ui-edge[data-edge="top"]    { translate: 0 calc(-100% - 24px); }
+    body.ui-hidden .ui-edge[data-edge="bottom"] { translate: 0 calc(100% + 24px); }
+    body.ui-hidden .ui-edge[data-edge="left"]   { translate: calc(-100% - 40px) 0; }
+    body.ui-hidden .ui-edge[data-edge="right"]  { translate: calc(100% + 40px) 0; }
+    .nav-btn:hover:not(:disabled) { scale: 1.06; background: rgba(30, 32, 48, 0.85); }
+    .nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    #drop-zone.drag-over {
+      border-color: rgba(250, 204, 21, 0.9) !important;
+      background: rgba(250, 204, 21, 0.12);
+    }
+
+    .thumb {
+      position: relative;
+      aspect-ratio: 5 / 7;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 2px solid transparent;
+      cursor: pointer;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .thumb.active { border-color: #facc15; box-shadow: 0 0 10px rgba(250, 204, 21, 0.5); }
+    .thumb .thumb-remove {
+      position: absolute; top: 2px; right: 2px;
+      width: 18px; height: 18px; border-radius: 9999px;
+      background: rgba(0, 0, 0, 0.7); color: #fff; font-size: 10px;
+      display: none; align-items: center; justify-content: center;
+    }
+    .thumb:hover .thumb-remove { display: flex; }
+
+    #select-transition option { background: #1a1c28; color: #e2e8f0; }
+
+    .glass-btn:active {
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body class="w-screen h-screen m-0 p-0 text-white select-none overflow-hidden relative">
+
+  <div id="canvas-container" class="absolute inset-0 z-0 cursor-grab active:cursor-grabbing"></div>
+
+  <header data-edge="top" class="ui-edge absolute top-0 left-0 right-0 p-4 md:p-6 z-40 flex justify-between items-center pointer-events-none">
+    <div class="flex items-center space-x-3 pointer-events-auto">
+      <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-400 via-yellow-500 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/30">
+        <i class="fa-solid fa-bolt text-lg text-slate-950 font-black"></i>
+      </div>
+      <div>
+        <h1 class="text-base md:text-xl font-black tracking-wider uppercase bg-clip-text text-transparent bg-gradient-to-r from-yellow-300 via-amber-200 to-orange-300">
+          Pokémon卡 · 3D 全像展台
+        </h1>
+        <p class="text-xs text-slate-400 font-medium">卡面 a.jpg ⚡ 卡背 背面圖庫 · 360° 自由環繞檢視</p>
+      </div>
+    </div>
+
+    <!-- Quick controls on the top right -->
+    <div class="pointer-events-auto flex items-center space-x-2">
+      <!-- File upload dropdown trigger -->
+      <label for="input-front" class="glass-btn px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 text-slate-200 hover:text-amber-300" title="更換正面 (a.jpg)">
+        <i class="fa-solid fa-image text-amber-400"></i>
+        <span class="hidden sm:inline">更換正面</span>
+      </label>
+      <input type="file" id="input-front" accept="image/*" multiple class="hidden">
+
+      <label for="input-back" class="glass-btn px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 text-slate-200 hover:text-cyan-300" title="更換卡背 (b.jpg)">
+        <i class="fa-solid fa-rotate-right text-cyan-400"></i>
+        <span class="hidden sm:inline">更換卡背</span>
+      </label>
+      <input type="file" id="input-back" accept="image/*" class="hidden">
+
+      <!-- Background music on / off -->
+      <button id="btn-music" type="button" class="glass-btn px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 text-slate-200 hover:text-violet-300" title="背景音樂 (B)">
+        <i id="music-icon" class="fa-solid fa-music text-violet-400"></i>
+        <span id="music-label" class="hidden sm:inline">音樂</span>
+      </button>
+      <input type="file" id="input-music" accept="audio/*" class="hidden">
+
+      <!-- Sound on / off -->
+      <button id="btn-sound" type="button" class="glass-btn px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 text-slate-200 hover:text-emerald-300" title="音效開關 (M)">
+        <i id="sound-icon" class="fa-solid fa-volume-high text-emerald-400"></i>
+        <span id="sound-label" class="hidden sm:inline">音效</span>
+      </button>
+
+      <!-- Background colour -->
+      <div class="relative">
+        <button id="btn-bg" type="button" class="glass-btn px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 text-slate-200 hover:text-pink-300" title="更換背景顏色">
+          <span id="bg-swatch" class="w-3.5 h-3.5 rounded-full border border-white/40" style="background:#181528"></span>
+          <span class="hidden sm:inline">背景顏色</span>
+        </button>
+        <div id="bg-popover" class="hidden absolute right-0 mt-2 p-3 rounded-2xl glass-panel w-52 space-y-2.5 z-30">
+          <div class="grid grid-cols-6 gap-2" id="bg-presets"></div>
+          <label class="flex items-center justify-between gap-2 text-xs text-slate-300 cursor-pointer">
+            <span>自訂顏色</span>
+            <input type="color" id="input-bg" value="#181528" class="w-9 h-7 rounded-md bg-transparent border border-white/20 cursor-pointer">
+          </label>
+        </div>
+      </div>
+
+      <div class="hidden md:flex items-center space-x-2 px-3 py-1.5 rounded-full glass-panel text-xs text-slate-300 border border-slate-700/60 shadow-lg">
+        <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="rotation-indicator">旋轉: 0°</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Control panel: right side, vertical -->
+  <div data-edge="right" class="ui-edge absolute right-4 md:right-6 top-1/2 -translate-y-1/2 z-20 pointer-events-auto">
+    <div class="glass-panel rounded-3xl p-3 w-40 flex flex-col gap-3 shadow-2xl border border-white/10 max-h-[80vh] overflow-y-auto">
+
+      <!-- Primary Action Buttons -->
+      <div class="flex flex-col gap-2">
+        <button id="btn-flip" title="翻轉卡牌 (Q)" class="w-full glass-btn px-3 py-2.5 rounded-2xl flex items-center gap-2 text-sm font-semibold text-slate-100 hover:text-white">
+          <i class="fa-solid fa-arrows-rotate text-cyan-400 w-4"></i>
+          <span>翻轉卡牌</span>
+          <kbd class="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-white/10 border border-white/15 text-slate-300">Q</kbd>
+        </button>
+        <button id="btn-autorotate" title="自動旋轉 (W)" class="w-full glass-btn px-3 py-2.5 rounded-2xl flex items-center gap-2 text-sm font-semibold text-slate-100 hover:text-white">
+          <i id="autorotate-icon" class="fa-solid fa-play text-amber-400 w-4"></i>
+          <span id="autorotate-label">自動旋轉</span>
+          <kbd class="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-white/10 border border-white/15 text-slate-300">W</kbd>
+        </button>
+        <button id="btn-spin" class="w-full glass-btn px-3 py-2.5 rounded-2xl flex items-center gap-2 text-sm font-semibold text-slate-100 hover:text-white" title="高速旋轉幾圈後回到目前位置 (E)">
+          <i class="fa-solid fa-tornado text-orange-400 w-4"></i>
+          <span>高速旋轉</span>
+          <kbd class="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-white/10 border border-white/15 text-slate-300">E</kbd>
+        </button>
+        <button id="btn-reset" class="w-full glass-btn px-3 py-2.5 rounded-2xl flex items-center gap-2 text-sm font-semibold text-slate-100 hover:text-white" title="重設正面視角 (R)">
+          <i class="fa-solid fa-crosshairs text-pink-400 w-4"></i>
+          <span>正面重設</span>
+          <kbd class="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-white/10 border border-white/15 text-slate-300">R</kbd>
+        </button>
+        <button id="btn-reset-back" class="w-full glass-btn px-3 py-2.5 rounded-2xl flex items-center gap-2 text-sm font-semibold text-slate-100 hover:text-white" title="重設背面視角 (T)">
+          <i class="fa-solid fa-crosshairs text-cyan-400 w-4"></i>
+          <span>背面重設</span>
+          <kbd class="ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-white/10 border border-white/15 text-slate-300">T</kbd>
+        </button>
+      </div>
+
+      <div class="border-t border-white/10"></div>
+
+      <!-- Hologram Controls -->
+      <div class="holo-group flex flex-col gap-1.5" data-target="front">
+        <span class="text-[11px] text-slate-400 font-medium px-1"><i class="fa-solid fa-image mr-1 text-amber-400"></i>正面效果</span>
+        <button class="holo-mode-btn w-full px-3 py-1.5 rounded-xl text-xs font-semibold text-left glass-btn text-slate-300 hover:text-white" data-mode="rainbow">彩虹全像</button>
+        <button class="holo-mode-btn w-full px-3 py-1.5 rounded-xl text-xs font-semibold text-left active bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 shadow-md shadow-amber-500/30" data-mode="subtle">弱化彩虹全像</button>
+        <button class="holo-mode-btn w-full px-3 py-1.5 rounded-xl text-xs font-semibold text-left glass-btn text-slate-300 hover:text-white" data-mode="none">無效果</button>
+      </div>
+
+      <div class="border-t border-white/10"></div>
+
+      <div class="holo-group flex flex-col gap-1.5" data-target="back">
+        <span class="text-[11px] text-slate-400 font-medium px-1"><i class="fa-solid fa-rotate-right mr-1 text-cyan-400"></i>卡背效果</span>
+        <button class="holo-mode-btn w-full px-3 py-1.5 rounded-xl text-xs font-semibold text-left glass-btn text-slate-300 hover:text-white" data-mode="rainbow">彩虹全像</button>
+        <button class="holo-mode-btn w-full px-3 py-1.5 rounded-xl text-xs font-semibold text-left glass-btn text-slate-300 hover:text-white" data-mode="subtle">弱化彩虹全像</button>
+        <button class="holo-mode-btn w-full px-3 py-1.5 rounded-xl text-xs font-semibold text-left active bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 shadow-md shadow-amber-500/30" data-mode="none">無效果</button>
+      </div>
+
+      <div class="border-t border-white/10"></div>
+
+      <!-- Card switch transition -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-[11px] text-slate-400 font-medium px-1"><i class="fa-solid fa-wand-magic-sparkles mr-1 text-pink-400"></i>換卡效果</span>
+        <select id="select-transition" class="w-full px-2.5 py-1.5 rounded-xl text-xs font-semibold glass-btn text-slate-100 cursor-pointer outline-none">
+          <option value="digital">數碼消散（代碼雨）</option>
+          <option value="flip">飛入換圖</option>
+          <option value="flash">閃光爆發</option>
+          <option value="sweep">全像掃光（光刻）</option>
+          <option value="random">隨機</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Previous / next front image (blue areas) -->
+  <button id="btn-prev" type="button" data-edge="left" class="ui-edge nav-btn absolute left-6 top-1/2 -translate-y-1/2 z-20 w-20 h-24 rounded-2xl glass-panel flex flex-col items-center justify-center gap-1.5 text-slate-200 hover:text-white" title="上一幅 (←)">
+    <i class="fa-solid fa-chevron-left text-xl text-amber-400"></i>
+    <span class="text-xs font-semibold">上一幅</span>
+  </button>
+  <button id="btn-next" type="button" data-edge="right" class="ui-edge nav-btn absolute right-[13rem] top-1/2 -translate-y-1/2 z-20 w-20 h-24 rounded-2xl glass-panel flex flex-col items-center justify-center gap-1.5 text-slate-200 hover:text-white" title="下一幅 (→)">
+    <i class="fa-solid fa-chevron-right text-xl text-amber-400"></i>
+    <span class="text-xs font-semibold">下一幅</span>
+  </button>
+
+  <!-- Bottom-left stack: UI toggle button sits just above the gallery -->
+  <div class="absolute left-6 bottom-6 z-30 flex flex-col items-start gap-2 pointer-events-none">
+  <button id="btn-toggle-ui" type="button" class="pointer-events-auto glass-panel glass-btn px-3.5 py-2 rounded-2xl flex items-center gap-2 text-xs font-semibold text-slate-100 hover:text-white" title="隱藏 / 顯示介面 (H)">
+    <i id="toggle-ui-icon" class="fa-solid fa-eye-slash text-amber-400 w-4"></i>
+    <span id="toggle-ui-label">隱藏介面</span>
+  </button>
+
+  <!-- Front image thumbnails (green area) -->
+  <div data-edge="left" class="ui-edge pointer-events-auto w-72 glass-panel rounded-3xl p-3 flex flex-col gap-2">
+    <div class="flex items-center justify-between text-xs text-slate-300 px-1">
+      <span><i class="fa-solid fa-images mr-1.5 text-amber-400"></i>正面圖庫</span>
+      <span id="gallery-counter" class="font-mono text-slate-400">0 / 0</span>
+    </div>
+    <div id="thumb-grid" class="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto pr-1"></div>
+    <p id="thumb-empty" class="text-[11px] text-slate-500 text-center py-6">未有圖片，請拖放到右下角</p>
+  </div>
+
+  <!-- Back image gallery: eight fixed card backs -->
+  <div data-edge="left" class="ui-edge pointer-events-auto w-72 glass-panel rounded-3xl p-3 flex flex-col gap-2">
+    <div class="flex items-center justify-between text-xs text-slate-300 px-1">
+      <span><i class="fa-solid fa-rotate-right mr-1.5 text-cyan-400"></i>背面圖庫</span>
+      <span id="back-counter" class="font-mono text-slate-400">1 / 8</span>
+    </div>
+    <div id="back-grid" class="grid grid-cols-4 gap-2"></div>
+  </div>
+  </div>
+
+  <!-- Batch drop zone for front images (red area) -->
+  <label id="drop-zone" for="input-batch" data-edge="right" class="ui-edge absolute right-6 bottom-6 z-20 w-72 h-48 rounded-3xl glass-panel border-2 border-dashed !border-white/25 flex flex-col items-center justify-center gap-2 text-center cursor-pointer transition-colors hover:!border-amber-400/70">
+    <i class="fa-solid fa-cloud-arrow-up text-3xl text-amber-400"></i>
+    <span class="text-sm font-semibold text-slate-200">拖放圖片到此</span>
+    <span class="text-[11px] text-slate-400">可一次放入多張作為正面 · 或點擊選擇</span>
+  </label>
+  <input type="file" id="input-batch" accept="image/*" multiple class="hidden">
+
+  <!-- User Interaction Hint -->
+  <div data-edge="bottom" class="ui-edge hidden xl:block absolute bottom-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none w-[40rem] text-center">
+    <p class="text-[11px] text-slate-400/90 tracking-wide flex items-center justify-center gap-1.5 flex-wrap">
+      <i class="fa-regular fa-hand-pointer text-amber-400"></i> 按住滑鼠左鍵或手指可 360° 無死角旋轉卡片 ｜ 移動滑鼠令卡片傾斜、折射彩虹光 ｜ 滾輪縮放
+    </p>
+  </div>
+
+  <script>
+    // ---------- Sound effects (synthesised with Web Audio, no audio files) ----------
+    const Sound = (() => {
+      let ctx = null, master = null, noiseBuf = null;
+      let enabled = true;
+      let transitionBus = null;
+      try { enabled = localStorage.getItem('cardShowcaseSound') !== 'off'; } catch (e) {}
+
+      function ensure() {
+        if (!ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return null;
+          ctx = new AC();
+          const comp = ctx.createDynamicsCompressor();
+          comp.threshold.value = -14;
+          comp.ratio.value = 4;
+          master = ctx.createGain();
+          master.gain.value = 0.6;
+          master.connect(comp);
+          comp.connect(ctx.destination);
+          noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+          const d = noiseBuf.getChannelData(0);
+          for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        }
+        if (ctx.state === 'suspended') ctx.resume();
+        return ctx;
+      }
+      // Browsers only allow audio after a user gesture: unlock on the first one
+      ['pointerdown', 'keydown'].forEach(ev =>
+        window.addEventListener(ev, () => { if (enabled) ensure(); }, { once: true, capture: true }));
+
+      const ready = () => (enabled ? ensure() : null);
+
+      function panNode(pan, dest) {
+        const target = dest || master;
+        if (pan === undefined || !ctx.createStereoPanner) return { node: target, pan: null };
+        const p = ctx.createStereoPanner();
+        p.pan.value = Math.max(-1, Math.min(1, pan));
+        p.connect(target);
+        return { node: p, pan: p };
+      }
+
+      function envelope(g, t0, attack, peak, release, hold = 0) {
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t0 + attack);
+        if (hold > 0) g.gain.setValueAtTime(Math.max(peak, 0.0002), t0 + attack + hold);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + hold + release);
+      }
+
+      function tone({ t = 0, freq = 440, to = null, dur = 0.2, type = 'sine', gain = 0.2,
+                      attack = 0.005, hold = 0, pan, dest }) {
+        const t0 = ctx.currentTime + t;
+        const o = ctx.createOscillator();
+        o.type = type;
+        o.frequency.setValueAtTime(freq, t0);
+        if (to) o.frequency.exponentialRampToValueAtTime(to, t0 + attack + hold + Math.max(dur - attack - hold, 0.01));
+        const g = ctx.createGain();
+        envelope(g, t0, attack, gain, Math.max(dur - attack - hold, 0.01), hold);
+        o.connect(g);
+        g.connect(panNode(pan, dest).node);
+        o.start(t0);
+        o.stop(t0 + dur + 0.05);
+      }
+
+      function noise({ t = 0, dur = 0.3, filter = 'bandpass', freq = 1000, to = null, q = 1,
+                       gain = 0.2, attack = 0.01, hold = 0, pan, dest }) {
+        const t0 = ctx.currentTime + t;
+        const src = ctx.createBufferSource();
+        src.buffer = noiseBuf;
+        src.loop = true;
+        const f = ctx.createBiquadFilter();
+        f.type = filter;
+        f.Q.value = q;
+        f.frequency.setValueAtTime(freq, t0);
+        if (to) f.frequency.exponentialRampToValueAtTime(to, t0 + dur);
+        const g = ctx.createGain();
+        envelope(g, t0, attack, gain, Math.max(dur - attack - hold, 0.01), hold);
+        src.connect(f); f.connect(g);
+        g.connect(panNode(pan, dest).node);
+        src.start(t0, Math.random() * 1.5);
+        src.stop(t0 + dur + 0.05);
+      }
+
+      // Each card switch gets its own bus so a quick re-switch can cut the old sound
+      function newTransitionBus() {
+        if (transitionBus) {
+          const old = transitionBus;
+          old.gain.cancelScheduledValues(ctx.currentTime);
+          old.gain.setTargetAtTime(0, ctx.currentTime, 0.03);
+          setTimeout(() => old.disconnect(), 400);
+        }
+        transitionBus = ctx.createGain();
+        transitionBus.connect(master);
+        return transitionBus;
+      }
+
+      // --- Card switch sounds ---
+      function digital(T, bus) {
+        // Glitch drop, a stream of data chirps, low hum, then a clean "resolve"
+        tone({ t: 0, freq: 1800, to: 180, dur: 0.28, type: 'square', gain: 0.05, dest: bus });
+        tone({ t: 0, freq: 62, dur: T, type: 'sine', gain: 0.07, attack: 0.25, hold: T * 0.5, dest: bus });
+        const notes = [880, 1174.7, 1318.5, 1760, 2093, 2637, 3136];
+        const n = Math.round(T * 34);
+        for (let i = 0; i < n; i++) {
+          const t = Math.random() * T * 0.9;
+          const mid = 1 - Math.abs(t / T - 0.45) * 1.4;   // busiest in the middle
+          if (Math.random() > Math.max(mid, 0.2)) continue;
+          tone({ t, freq: notes[Math.floor(Math.random() * notes.length)], dur: 0.03 + Math.random() * 0.04,
+                 type: 'square', gain: 0.018 + Math.random() * 0.025, pan: (Math.random() - 0.5) * 1.2, dest: bus });
+        }
+        tone({ t: T * 0.82, freq: 660, to: 1320, dur: 0.32, type: 'sine', gain: 0.07, dest: bus });
+        tone({ t: T * 0.86, freq: 990, dur: 0.4, type: 'triangle', gain: 0.04, dest: bus });
+      }
+
+      function flash(T, bus) {
+        const peak = T * 0.4;
+        // Rising whoosh into the flash
+        noise({ t: 0, dur: peak + 0.05, filter: 'bandpass', freq: 300, to: 6000, q: 1.2, gain: 0.16, attack: peak * 0.85, dest: bus });
+        tone({ t: 0, freq: 220, to: 880, dur: peak, type: 'sawtooth', gain: 0.025, attack: peak * 0.8, dest: bus });
+        // Burst: deep boom + air
+        tone({ t: peak, freq: 95, to: 38, dur: 0.7, type: 'sine', gain: 0.38, dest: bus });
+        noise({ t: peak, dur: 0.6, filter: 'lowpass', freq: 2500, to: 300, q: 0.5, gain: 0.22, attack: 0.004, dest: bus });
+        // White-gold shimmer chord with ripples (slight detune + tremolo feel)
+        [1046.5, 1318.5, 1568, 2093, 2637].forEach((f, i) => {
+          tone({ t: peak + 0.02 + i * 0.015, freq: f, dur: 1.6, type: 'sine', gain: 0.045, attack: 0.01, dest: bus });
+          tone({ t: peak + 0.02 + i * 0.015, freq: f * 1.006, dur: 1.4, type: 'triangle', gain: 0.02, attack: 0.01, dest: bus });
+        });
+        // Glittering particles drifting outward
+        for (let i = 0; i < 26; i++) {
+          tone({ t: peak + 0.05 + Math.random() * 1.4, freq: 2600 + Math.random() * 4200, dur: 0.1 + Math.random() * 0.12,
+                 type: 'sine', gain: 0.012 + Math.random() * 0.025, pan: (Math.random() - 0.5) * 1.8, dest: bus });
+        }
+      }
+
+      function laser(T, bus) {
+        // Laser is on the card from 10% to 90% of the transition (same as the visuals)
+        const t0 = T * 0.1, t1 = T * 0.9, len = t1 - t0;
+        const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        if (panner) panner.connect(bus);
+        const dest = panner || bus;
+        const now = ctx.currentTime;
+        if (panner) {
+          // Pan follows the laser head back and forth
+          for (let t = t0; t <= t1; t += 0.02) {
+            const u = laserHeadU(t / T);
+            panner.pan.linearRampToValueAtTime((u - 0.5) * 1.6, now + t);
+          }
+        }
+        tone({ t: t0, freq: 2400, to: 500, dur: 0.12, type: 'sawtooth', gain: 0.05, dest });      // ignition zap
+        // Buzzing beam: two detuned oscillators through a resonant band
+        [[118, 'sawtooth', 0.05], [236.5, 'square', 0.025], [59, 'sawtooth', 0.03]].forEach(([f, type, g]) => {
+          const o = ctx.createOscillator();
+          o.type = type; o.frequency.value = f;
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.5;
+          const gn = ctx.createGain();
+          envelope(gn, now + t0, 0.04, g, 0.12, len - 0.16);
+          o.connect(bp); bp.connect(gn); gn.connect(dest);
+          o.start(now + t0); o.stop(now + t1 + 0.1);
+        });
+        // Etching hiss
+        noise({ t: t0, dur: len, filter: 'highpass', freq: 3800, q: 0.7, gain: 0.05, attack: 0.04, hold: len - 0.2, dest });
+        // Spark crackles, panned to where the head is at that moment
+        const pops = Math.round(len * 55);
+        for (let i = 0; i < pops; i++) {
+          const t = t0 + Math.random() * len;
+          const u = laserHeadU(t / T);
+          noise({ t, dur: 0.012 + Math.random() * 0.02, filter: 'bandpass', freq: 2500 + Math.random() * 5000, q: 2,
+                  gain: 0.04 + Math.random() * 0.1, attack: 0.001, pan: (u - 0.5) * 1.6 + (Math.random() - 0.5) * 0.3, dest: bus });
+        }
+      }
+
+      function fly(T, dir, bus) {
+        const enterSide = dir < 0 ? 1 : -1;
+        // Out: whoosh away to one side
+        noise({ t: 0, dur: 0.38, filter: 'bandpass', freq: 500, to: 2200, q: 0.9, gain: 0.22, attack: 0.25, pan: -enterSide * 0.7, dest: bus });
+        // In: whoosh from the other side
+        noise({ t: 0.35, dur: 0.38, filter: 'bandpass', freq: 2400, to: 600, q: 0.9, gain: 0.24, attack: 0.08, pan: enterSide * 0.5, dest: bus });
+        // Landing thud
+        tone({ t: 0.7, freq: 130, to: 55, dur: 0.35, type: 'sine', gain: 0.32, dest: bus });
+        noise({ t: 0.7, dur: 0.1, filter: 'lowpass', freq: 900, q: 0.7, gain: 0.15, attack: 0.002, dest: bus });
+        // Softer and softer wobble taps as it settles
+        [[0.83, 0.1], [1.1, 0.06], [1.38, 0.035], [1.71, 0.018]].forEach(([t, g]) =>
+          tone({ t, freq: 200, to: 140, dur: 0.14, type: 'sine', gain: g, dest: bus }));
+      }
+
+      return {
+        get enabled() { return enabled; },
+        setEnabled(on) {
+          enabled = on;
+          try { localStorage.setItem('cardShowcaseSound', on ? 'on' : 'off'); } catch (e) {}
+          if (on) ensure();
+          if (master) master.gain.setTargetAtTime(on ? 0.6 : 0, ctx.currentTime, 0.05);
+        },
+
+        transition(type, ms, dir) {
+          if (!ready()) return;
+          const bus = newTransitionBus();
+          const T = ms / 1000;
+          if (type === 'digital') digital(T, bus);
+          else if (type === 'flash') flash(T, bus);
+          else if (type === 'sweep') laser(T, bus);
+          else if (type === 'flip') fly(T, dir, bus);
+        },
+
+        swish() {                                    // Q: flip card
+          if (!ready()) return;
+          noise({ dur: 0.5, filter: 'bandpass', freq: 600, to: 2600, q: 0.8, gain: 0.22, attack: 0.2 });
+          tone({ t: 0.55, freq: 160, to: 90, dur: 0.15, type: 'sine', gain: 0.12 });
+        },
+
+        toggle(on) {                                 // W: auto-rotate, H: UI
+          if (!ready()) return;
+          tone({ freq: on ? 880 : 660, to: on ? 1320 : 440, dur: 0.09, type: 'triangle', gain: 0.1 });
+        },
+
+        tick() {                                     // R / T resets, effect buttons
+          if (!ready()) return;
+          tone({ freq: 1600, dur: 0.05, type: 'triangle', gain: 0.08 });
+          tone({ t: 0.03, freq: 2400, dur: 0.05, type: 'sine', gain: 0.05 });
+        },
+
+        spin(turns, spinMs, settleMs, kAt) {         // E: high-speed spin
+          if (!ready()) return;
+          const TS = spinMs / 1000, TW = settleMs / 1000, total = TS + TW;
+          // Continuous wind whose loudness and pitch follow the spin speed
+          const now = ctx.currentTime;
+          const src = ctx.createBufferSource();
+          src.buffer = noiseBuf; src.loop = true;
+          const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+          const g = ctx.createGain(); g.gain.value = 0.0001;
+          src.connect(bp); bp.connect(g); g.connect(master);
+          let prevK = kAt(0), lastHalf = 0;
+          for (let t = 0.02; t <= total; t += 0.02) {
+            const k = kAt(t);
+            const speed = Math.abs(k - prevK) / 0.02 * turns;    // turns per second
+            prevK = k;
+            g.gain.linearRampToValueAtTime(Math.min(0.02 + speed * 0.025, 0.22), now + t);
+            bp.frequency.linearRampToValueAtTime(300 + speed * 260, now + t);
+            // A whoosh each time the card passes edge-on (every half turn)
+            const half = Math.floor(k * turns * 2);
+            if (half > lastHalf && t < TS + 0.05) {
+              lastHalf = half;
+              noise({ t, dur: 0.1, filter: 'bandpass', freq: 600 + speed * 300, q: 2, gain: Math.min(0.03 + speed * 0.02, 0.16), attack: 0.02 });
+            }
+          }
+          g.gain.linearRampToValueAtTime(0.0001, now + total + 0.1);
+          src.start(now); src.stop(now + total + 0.2);
+          // Settling rocks
+          [[1.63, 0.1], [1.95, 0.06], [2.3, 0.03]].forEach(([t, gn]) =>
+            tone({ t, freq: 320, to: 220, dur: 0.12, type: 'triangle', gain: gn }));
+        },
+
+        chime() {                                    // images added
+          if (!ready()) return;
+          [1318.5, 1760].forEach((f, i) => tone({ t: i * 0.07, freq: f, dur: 0.35, type: 'sine', gain: 0.06 }));
+        }
+      };
+    })();
+
+    // Procedural fallback card front generator (matching Pikachu card)
+    function createProceduralFront() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 1433; // 1:1.4
+      const ctx = canvas.getContext('2d');
+
+      // Yellow outer border
+      ctx.fillStyle = '#ffde00';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Gold inner glitter edge
+      ctx.lineWidth = 16;
+      ctx.strokeStyle = '#e0aa3e';
+      ctx.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
+
+      // Card body
+      ctx.fillStyle = '#fce238';
+      ctx.fillRect(36, 36, canvas.width - 72, canvas.height - 72);
+
+      // Title & HP
+      ctx.fillStyle = '#1c1b22';
+      ctx.font = 'bold 52px "Noto Sans TC", sans-serif';
+      ctx.fillText('Pokémon', 60, 105);
+
+      ctx.fillStyle = '#d92c2c';
+      ctx.font = 'bold 44px "Plus Jakarta Sans", sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('HP ', canvas.width - 60, 105);
+
+      // Attack
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#111';
+      ctx.font = 'bold 44px "Noto Sans TC", sans-serif';
+      ctx.fillText('⚡ MAX', 80, 880);
+      ctx.textAlign = 'right';
+      ctx.fillText('', canvas.width - 80, 880);
+
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    // Procedural fallback card back generator (matching Pokémon classic back)
+    // Glyph atlas for the code-rain transition: 8×8 mirrored half-width katakana and digits
+    function createGlyphAtlas() {
+      const chars = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ0123456789Z:.=*+-<>¦';
+      const cell = 64, n = 8;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = cell * n;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 48px "MS Gothic", "Osaka-Mono", "Noto Sans JP", "Noto Sans TC", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let i = 0; i < n * n; i++) {
+        const ch = chars[i % chars.length];
+        const cx = (i % n) * cell + cell / 2;
+        const cy = Math.floor(i / n) * cell + cell / 2;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.scale(-1, 1);                // mirrored, like the film
+        ctx.fillText(ch, 0, 2);
+        ctx.restore();
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.generateMipmaps = false;
+      tex.minFilter = THREE.LinearFilter;
+      return tex;
+    }
+
+    function createProceduralBack() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 1433;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#10224d';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.lineWidth = 16;
+      ctx.strokeStyle = '#bf9337';
+      ctx.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffcb05';
+      ctx.font = '900 64px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText('Pokémon', canvas.width / 2, 220);
+
+      // Pokéball
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2, canvas.height / 2, 200, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.lineWidth = 20;
+      ctx.strokeStyle = '#1e2430';
+      ctx.stroke();
+
+      ctx.fillStyle = '#333';
+      ctx.font = 'bold 32px "Noto Sans TC", sans-serif';
+      ctx.fillText('【 背面卡圖 b.jpg 載入中... 】', canvas.width / 2, canvas.height / 2 + 300);
+
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 7.0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    container.appendChild(renderer.domElement);
+
+    // Studio Lights setup
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+    scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xfff7e6, 1.4);
+    keyLight.position.set(4, 5, 5);
+    scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0x60a5fa, 0.75);
+    fillLight.position.set(-5, -4, 4);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xf59e0b, 0.9);
+    rimLight.position.set(0, 4, -5);
+    scene.add(rimLight);
+
+    const textureLoader = new THREE.TextureLoader();
+
+    // Textures setup with procedural fallback
+    let frontTexture = createProceduralFront();
+    let backTexture = createProceduralBack();
+
+    // ---------- Front image gallery ----------
+    // Each entry: { name, url, texture (loaded lazily, then cached) }
+    const frontGallery = [];
+    let currentFrontIndex = -1;
+
+    const thumbGrid = document.getElementById('thumb-grid');
+    const thumbEmpty = document.getElementById('thumb-empty');
+    const galleryCounter = document.getElementById('gallery-counter');
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
+
+    function prepareTexture(tex) {
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.needsUpdate = true;
+      return tex;
+    }
+
+    // ---------- Card switch transitions ----------
+    const TRANSITIONS = {
+      digital: { ms: 2200, shaderType: 0 },
+      flash:   { ms: 1400, shaderType: 1 },
+      sweep:   { ms: 1700, shaderType: 2 },
+      flip:    { ms: 1900 }                 // card slides out/in and settles with wobbles, not in the shader
+    };
+    let transitionChoice = 'digital';
+    let frontTransition = null;
+
+    const selectTransition = document.getElementById('select-transition');
+    try {
+      const saved = localStorage.getItem('cardShowcaseTransition');
+      if (saved && (saved === 'random' || TRANSITIONS[saved])) transitionChoice = saved;
+    } catch (e) {}
+    selectTransition.value = transitionChoice;
+    selectTransition.addEventListener('change', () => {
+      transitionChoice = selectTransition.value;
+      try { localStorage.setItem('cardShowcaseTransition', transitionChoice); } catch (e) {}
+      selectTransition.blur(); // hand keyboard focus back to the page after choosing
+    });
+
+    function finishFrontTransition() {
+      if (!frontTransition) return;
+      const u = foilCustomShader.uniforms;
+      u.tDiffuse.value = frontTransition.tex;
+      u.uTrans.value = 0;
+      flipPivot.rotation.set(0, 0, 0);
+      flipPivot.position.set(0, 0, 0);
+      frontTransition = null;
+    }
+
+    // dir: -1 = previous card, +1 = next card (decides which side the card flies in from)
+    function setFrontTexture(tex, dir = 1) {
+      const u = foilCustomShader.uniforms;
+      finishFrontTransition();             // a switch mid-transition finishes the old one first
+      if (u.tDiffuse.value === tex) return;
+
+      let type = transitionChoice;
+      if (type === 'random') {
+        const keys = Object.keys(TRANSITIONS);
+        type = keys[Math.floor(Math.random() * keys.length)];
+      }
+      const cfg = TRANSITIONS[type];
+      frontTransition = { type, tex, dir, ms: cfg.ms, start: performance.now(), swapped: false };
+      Sound.transition(type, cfg.ms, dir);
+
+      if (type !== 'flip') {
+        u.tNext.value = tex;
+        u.uTransType.value = cfg.shaderType;
+        u.uTrans.value = 0.0001;
+      }
+    }
+
+    function updateFrontTransition() {
+      if (!frontTransition) return;
+      const tr = frontTransition;
+      const p = Math.min((performance.now() - tr.start) / tr.ms, 1);
+
+      if (tr.type === 'flip') {
+        // Previous card (dir -1) flies in from the right, next card (dir +1) from the left.
+        // No spinning: the current card slides out on the opposite side, the image swaps
+        // off-screen, then the new card slides in and overshoots with a springy bounce.
+        const enterSide = tr.dir < 0 ? 1 : -1;
+        const exitSide = -enterSide;
+        const OFF_X = 8.5;
+        flipPivot.rotation.y = 0;
+
+        // Timeline in seconds: slide out → arrive → settle with natural wobbles
+        const T_OUT = 0.35, T_ARRIVE = 0.35, T_WOBBLE = 1.2;
+        const T = p * (T_OUT + T_ARRIVE + T_WOBBLE);
+
+        // Wobble: amplitude fades out and each swing gets slower, like the card is
+        // running out of energy; it ends at the centre with zero speed.
+        const A = 0.1, DECAY = 1.6;
+        const theta = (t) => 4 * Math.PI * (1.25 * t - 0.25 * t * t);   // 4 swings, slowing down
+        const envelope = (t) => Math.exp(-DECAY * t) * (1 - t * t);
+        const wobble = (t) => -A * envelope(t) * Math.sin(theta(t));
+        const wobbleStartSpeed = -A * 5 * Math.PI / T_WOBBLE;           // matches arrival speed
+
+        let k;
+        if (T < T_OUT) {
+          // Slide out, accelerating
+          const q = Math.pow(T / T_OUT, 3);
+          k = null;
+          flipPivot.position.x = exitSide * q * OFF_X;
+          flipPivot.position.z = q * 0.5;
+        } else {
+          if (!tr.swapped) { foilCustomShader.uniforms.tDiffuse.value = tr.tex; tr.swapped = true; }
+          if (T < T_OUT + T_ARRIVE) {
+            // Arrival curve that flows into the wobble at the same speed (no jerk)
+            const s = (T - T_OUT) / T_ARRIVE, s2 = s * s, s3 = s2 * s;
+            const m0 = -1.0, m1 = wobbleStartSpeed * T_ARRIVE;
+            k = (2 * s3 - 3 * s2 + 1) + (s3 - 2 * s2 + s) * m0 + (s3 - s2) * m1;
+          } else {
+            k = wobble(Math.min((T - T_OUT - T_ARRIVE) / T_WOBBLE, 1));
+          }
+          flipPivot.position.x = enterSide * k * OFF_X;
+          flipPivot.position.z = Math.max(k, 0) * 0.5;
+        }
+
+        // Gentle lean against the motion, like a card swaying as it moves
+        const now = performance.now();
+        if (tr.lastX !== undefined) {
+          const dt = Math.max((now - tr.lastT) / 1000, 0.001);
+          const vel = (flipPivot.position.x - tr.lastX) / dt;
+          const targetLean = Math.max(-0.05, Math.min(0.05, -vel * 0.006));
+          flipPivot.rotation.z += (targetLean - flipPivot.rotation.z) * 0.25;
+        }
+        tr.lastX = flipPivot.position.x;
+        tr.lastT = now;
+      } else {
+        foilCustomShader.uniforms.uTrans.value = Math.max(p, 0.0001);
+        // Particles, halo and shockwaves fire just before the flash peaks
+        if (tr.type === 'flash' && !tr.burst && p >= 0.4) { startBurst(); tr.burst = true; }
+      }
+
+      if (p >= 1) finishFrontTransition();
+    }
+
+    // dir: -1 previous / +1 next. When not given, it comes from comparing positions.
+    function showFront(index, dir) {
+      if (!frontGallery.length) return;
+      const target = (index + frontGallery.length) % frontGallery.length; // wrap around
+      if (dir === undefined) dir = target < currentFrontIndex ? -1 : 1;
+      currentFrontIndex = target;
+      const entry = frontGallery[currentFrontIndex];
+      if (entry.texture) {
+        setFrontTexture(entry.texture, dir);
+      } else {
+        const wanted = currentFrontIndex;
+        textureLoader.load(entry.url, (tex) => {
+          entry.texture = prepareTexture(tex);
+          if (currentFrontIndex === wanted) setFrontTexture(entry.texture, dir);
+        });
+      }
+      renderGallery();
+    }
+
+    function removeFront(index) {
+      const [removed] = frontGallery.splice(index, 1);
+      if (removed.url.startsWith('blob:')) URL.revokeObjectURL(removed.url);
+      if (removed.texture) removed.texture.dispose();
+
+      if (!frontGallery.length) {
+        currentFrontIndex = -1;
+        setFrontTexture(frontTexture); // back to placeholder
+        renderGallery();
+        return;
+      }
+      if (index < currentFrontIndex) currentFrontIndex--;
+      showFront(Math.min(currentFrontIndex, frontGallery.length - 1));
+    }
+
+    function renderGallery() {
+      thumbGrid.innerHTML = '';
+      frontGallery.forEach((entry, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'thumb' + (i === currentFrontIndex ? ' active' : '');
+        cell.title = entry.name;
+
+        const img = document.createElement('img');
+        img.src = entry.url;
+        img.alt = entry.name;
+        img.draggable = false;
+        cell.appendChild(img);
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'thumb-remove';
+        del.title = '移除';
+        del.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+        del.addEventListener('click', (e) => { e.stopPropagation(); removeFront(i); });
+        cell.appendChild(del);
+
+        cell.addEventListener('click', () => showFront(i));
+        thumbGrid.appendChild(cell);
+      });
+
+      const n = frontGallery.length;
+      thumbEmpty.classList.toggle('hidden', n > 0);
+      galleryCounter.textContent = n ? `${currentFrontIndex + 1} / ${n}` : '0 / 0';
+      btnPrev.disabled = btnNext.disabled = n < 2;
+
+      const activeThumb = thumbGrid.querySelector('.thumb.active');
+      if (activeThumb) activeThumb.scrollIntoView({ block: 'nearest' });
+    }
+
+    // Add image files to the gallery and show the first one that was added
+    function addFrontFiles(fileList) {
+      const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+      if (!files.length) return;
+      const firstNew = frontGallery.length;
+      files.forEach(f => frontGallery.push({ name: f.name, url: URL.createObjectURL(f), texture: null }));
+      Sound.chime();
+      showFront(firstNew, 1);
+    }
+
+    btnPrev.addEventListener('click', () => showFront(currentFrontIndex - 1, -1));
+    btnNext.addEventListener('click', () => showFront(currentFrontIndex + 1, 1));
+    // ← / → always switch cards. Captured and default-prevented so a focused
+    // control (e.g. the 換卡效果 dropdown) never changes its value from these keys.
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.target.tagName === 'INPUT' && e.target.type !== 'file' && e.target.type !== 'color') return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      showFront(currentFrontIndex + dir, dir);
+    }, true);
+
+    // Drop zone
+    const dropZone = document.getElementById('drop-zone');
+    ['dragenter', 'dragover'].forEach(type => dropZone.addEventListener(type, (e) => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    }));
+    ['dragleave', 'drop'].forEach(type => dropZone.addEventListener(type, (e) => {
+      e.preventDefault();
+      if (type === 'dragleave' && dropZone.contains(e.relatedTarget)) return;
+      dropZone.classList.remove('drag-over');
+    }));
+    dropZone.addEventListener('drop', (e) => addFrontFiles(e.dataTransfer.files));
+
+    // Stop the browser from opening a file dropped anywhere else on the page
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => e.preventDefault());
+
+    document.getElementById('input-batch').addEventListener('change', (e) => {
+      addFrontFiles(e.target.files);
+      e.target.value = '';
+    });
+
+    renderGallery();
+
+    // Default front a.jpg becomes the first gallery entry when it exists
+    textureLoader.load(
+      'a.jpg',
+      (tex) => {
+        frontGallery.unshift({ name: 'a.jpg', url: 'a.jpg', texture: prepareTexture(tex) });
+        if (currentFrontIndex >= 0) currentFrontIndex++; // user already added images
+        else currentFrontIndex = 0;
+        showFront(currentFrontIndex);
+      },
+      undefined,
+      () => {
+        console.warn('a.jpg not found directly, using rendered procedural card texture.');
+      }
+    );
+
+    const foilCustomShader = {
+      uniforms: {
+        tDiffuse: { value: frontTexture },
+        uMouse: { value: new THREE.Vector2(0.5, 0.5) },
+        uMode: { value: 1 }, // 0: Rainbow, 1: Subtle Rainbow, 2: No effect (front starts subtle)
+        uTime: { value: 0.0 },
+        uIntensity: { value: 0.9 },
+        // Virtual light in view space (slightly above-left of the camera)
+        uLightDir: { value: new THREE.Vector3(-0.25, 0.35, 1.0).normalize() },
+        // Digital dissolve transition: 0 = idle; 0→0.5 old image breaks apart,
+        // 0.5→1 the next image (tNext) assembles in
+        tNext: { value: null },
+        uTrans: { value: 0.0 },
+        uTransType: { value: 0 }, // 0: code rain (digital), 1: flash burst, 2: holo sweep
+        tGlyphs: { value: createGlyphAtlas() },
+        uLaserX: { value: 0.5 }   // laser head position across the card (0..1) for the sweep
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vViewDir;
+
+        void main() {
+          vUv = uv;
+          vNormal = normalize(normalMatrix * normal);
+          vec4 worldPos = modelViewMatrix * vec4(position, 1.0);
+          vViewDir = -worldPos.xyz; // normalized per-fragment for accurate angles
+          gl_Position = projectionMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform vec2 uMouse;
+        uniform int uMode;
+        uniform float uTime;
+        uniform float uIntensity;
+        uniform vec3 uLightDir;
+        uniform sampler2D tNext;
+        uniform float uTrans;
+        uniform int uTransType;
+        uniform sampler2D tGlyphs;
+        uniform float uLaserX;
+
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vViewDir;
+
+        // Spectral rainbow color palette
+        vec3 spectralPalette(float t) {
+          return 0.5 + 0.5 * cos(6.28318 * (vec3(1.0, 1.0, 1.0) * t + vec3(0.0, 0.33, 0.67)));
+        }
+
+        // Procedural glitter & spark noise
+        float sparkleNoise(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+        }
+
+        void main() {
+          vec4 baseColor;
+          vec3 digitalGlow = vec3(0.0);
+          float holoMute = 1.0;   // the code rain dims the foil so it reads as a screen
+          float fragAlpha = -1.0; // set when a pixel should be see-through (code rain)
+
+          if (uTrans > 0.0 && uTransType == 1) {
+            // ---- Flash burst: rippling white-gold flash, image swaps at the peak ----
+            vec2 c = (vUv - 0.5) * vec2(1.0, 1.4);            // card-aspect centred coords
+            float d = length(c);
+            vec2 dir = d > 0.0001 ? c / d : vec2(0.0);
+
+            float flash = pow(1.0 - abs(uTrans - 0.5) * 2.0, 1.6);
+
+            // Wave train expanding from the centre; strongest just behind the wave front
+            float front = uTrans * 1.7;
+            float behind = front - d;
+            float inside = step(0.0, behind);
+            float amp = inside * exp(-behind * 2.2) * (1.0 - smoothstep(0.8, 1.0, uTrans));
+            float wave = sin(behind * 42.0);
+
+            // Ripples bend the image like light on water
+            vec2 uvR = vUv + (dir / vec2(1.0, 1.4)) * wave * amp * 0.018;
+            baseColor = uTrans < 0.5 ? texture2D(tDiffuse, uvR) : texture2D(tNext, uvR);
+
+            // White-gold light whose brightness follows the ripples
+            vec3 whiteGold = mix(vec3(1.0, 0.98, 0.93), vec3(1.0, 0.82, 0.42), 0.5 + 0.5 * wave);
+            float flashMix = clamp(flash * (0.72 + 0.28 * wave * amp), 0.0, 0.95);
+            baseColor.rgb = mix(baseColor.rgb, whiteGold, flashMix);
+
+            // Bright crests, a leading shock ring and a hot centre
+            float crest = pow(max(wave, 0.0), 6.0) * amp;
+            float lead = (1.0 - smoothstep(0.0, 0.05, abs(d - front))) * (1.0 - uTrans);
+            float core = exp(-d * 6.0) * flash;
+            digitalGlow = vec3(1.0, 0.88, 0.5) * (crest * 1.4 + lead * 2.0 + core * 1.2 + flash * 0.5);
+
+          } else if (uTrans > 0.0 && uTransType == 2) {
+            // ---- Holo sweep, laser-etch style: a thin burning laser line scans down ----
+            float bandY = 1.15 - uTrans * 1.3;
+
+            // Burn front is slightly ragged and flickers, like material being etched
+            float rag = (sparkleNoise(vec2(floor(vUv.x * 90.0), floor(uTime * 40.0))) - 0.5) * 0.006
+                      + sin(vUv.x * 40.0 + uTime * 9.0) * 0.0015;
+            float dy = vUv.y - bandY + rag;          // > 0: already etched (new image)
+
+            baseColor = dy > 0.0 ? texture2D(tNext, vUv) : texture2D(tDiffuse, vUv);
+
+            float ad = abs(dy);
+            float core = exp(-ad * 520.0);                      // white-hot laser line
+            float halo = exp(-ad * 45.0);                       // holographic glow around it
+            float flickerL = 0.85 + 0.15 * sparkleNoise(vec2(floor(uTime * 50.0), 1.3));
+            vec3 spectrum = spectralPalette(vUv.x * 1.6 + vUv.y * 3.0 - uTime * 1.2);
+
+            // Freshly etched area just behind the line: glowing heat with sparkling grains
+            float heat = dy > 0.0 ? exp(-dy * 22.0) : exp(dy * 140.0) * 0.4;   // a little pre-heat ahead
+            float grain = step(0.965, sparkleNoise(floor(vUv * vec2(220.0, 300.0)) + floor(uTime * 30.0)));
+            vec3 heatCol = mix(vec3(1.0, 0.45, 0.12), vec3(1.0, 0.85, 0.55), heat);
+
+            baseColor.rgb = mix(baseColor.rgb, baseColor.rgb * vec3(1.0, 0.8, 0.6), heat * 0.35); // warm tint
+            // Laser head: an intense hot spot travelling back and forth along the line
+            vec2 hd = (vUv - vec2(uLaserX, bandY)) * vec2(1.0, 1.4);
+            float headGlow = exp(-length(hd) * 30.0) * 2.2 + exp(-length(hd) * 9.0) * 0.5;
+
+            digitalGlow = vec3(1.0) * headGlow * flickerL
+                        + vec3(1.0, 0.97, 0.9) * core * 2.4 * flickerL
+                        + spectrum * halo * 0.9
+                        + heatCol * heat * 0.55
+                        + vec3(1.0, 0.8, 0.45) * grain * heat * 2.0;
+
+          } else if (uTrans > 0.0) {
+            // ---- Code rain (Matrix style) ----
+            // Phase 1: the old image is rewritten into falling white code, top-down, column by column.
+            // Phase 2: the code keeps falling and the new image resolves out of it, top-down.
+            bool outPhase = uTrans < 0.5;
+            float p = outPhase ? uTrans * 2.0 : (uTrans - 0.5) * 2.0;   // 0..1 within phase
+
+            vec2 grid = vec2(24.0, 34.0);                 // columns × rows across the card
+            vec2 cell = floor(vUv * grid);
+            vec2 local = fract(vUv * grid);
+            float yTop = 1.0 - (cell.y + 0.5) / grid.y;   // 0 at the top edge, 1 at the bottom
+
+            // Each column: its own fall speed, phase and glyph flicker rate
+            float colRand = sparkleNoise(vec2(cell.x, 3.7));
+            float speed = 0.45 + colRand * 1.1;
+            float head = fract(uTime * speed * 0.6 + colRand * 7.3);
+            float behind = head - yTop;
+            behind = behind < 0.0 ? behind + 1.0 : behind;
+            float trail = exp(-behind * 4.5);             // bright head, fading tail above it
+            float isHead = 1.0 - step(1.2 / grid.y, behind);
+
+            // Glyph per cell, re-rolled at random moments
+            float flick = floor(uTime * (3.0 + colRand * 9.0) + sparkleNoise(cell) * 13.0);
+            float gi = floor(sparkleNoise(cell + flick * 0.731) * 64.0);
+            vec2 gc = vec2(mod(gi, 8.0), floor(gi / 8.0));
+            vec2 lp = clamp((local - 0.5) * 1.15 + 0.5, 0.0, 1.0);
+            vec2 guv = vec2((gc.x + lp.x) / 8.0, (7.0 - gc.y + lp.y) / 8.0);
+            float glyph = texture2D(tGlyphs, guv).r;
+
+            // The code carries a ghost of the picture: brightness follows the image under it
+            vec2 cellCentre = (cell + 0.5) / grid;
+            vec3 srcCell = outPhase ? texture2D(tDiffuse, cellCentre).rgb : texture2D(tNext, cellCentre).rgb;
+            float lum = dot(srcCell, vec3(0.299, 0.587, 0.114));
+
+            vec3 rain = vec3(0.92) * glyph * (0.18 + 0.82 * trail) * (0.35 + 0.95 * lum)
+                      + vec3(1.0) * glyph * isHead * 0.9;                                   // brightest heads
+
+            // Top-down conversion front, staggered per column
+            float colDelay = sparkleNoise(vec2(cell.x, 9.1)) * 0.35;
+            float f = clamp(p * 1.4 - colDelay, 0.0, 1.05);
+            bool rainHere = outPhase ? (yTop < f) : (yTop >= f);
+            float band = 1.0 - smoothstep(0.0, 2.5 / grid.y, abs(yTop - f));
+
+            vec4 img = outPhase ? texture2D(tDiffuse, vUv) : texture2D(tNext, vUv);
+            if (rainHere) {
+              // Transparent background: only the glowing characters are drawn
+              if (img.a < 0.5) discard;
+              float a = clamp(max(rain.g, max(rain.r, rain.b)) * 1.3, 0.0, 1.0);
+              if (a < 0.03) discard;
+              baseColor = vec4(rain / max(a, 0.001), 1.0);
+              fragAlpha = a;
+            } else {
+              // Picture fades to a white monochrome near the front (and lingers as the new image settles)
+              float g = clamp(band * 0.85 + (outPhase ? 0.0 : (1.0 - p) * 0.35), 0.0, 1.0);
+              vec3 phosphor = vec3(lum);
+              baseColor = vec4(mix(img.rgb, phosphor, g) + vec3(1.0) * glyph * band * 0.5, img.a);
+            }
+
+            // Glowing code right at the front line, plus faint scanlines
+            float scan = 0.9 + 0.1 * sin(vUv.y * 700.0);
+            digitalGlow = vec3(1.0) * glyph * band * 1.1 * scan;
+            holoMute = rainHere ? 0.15 : 1.0 - band * 0.6;
+          } else {
+            baseColor = texture2D(tDiffuse, vUv);
+          }
+          if (baseColor.a < 0.5) discard; // respect transparent corners in PNG art
+
+          vec3 N = normalize(vNormal);
+          vec3 V = normalize(vViewDir);
+
+          // Fresnel incidence angle
+          float fresnel = clamp(1.0 - dot(N, V), 0.0, 1.0);
+
+          vec3 holoEffect = vec3(0.0);
+
+          if (uMode != 2) {
+            // MODE 0: Rainbow Holographic Foil / MODE 1: Subtle Rainbow
+            // Angle-driven rainbow holographic foil
+            // Colour depends only on the card's orientation relative to the
+            // camera and a fixed virtual light — not on the pointer position.
+            vec3 R = reflect(-V, N);              // mirror direction off the foil
+            vec3 L = normalize(uLightDir);
+
+            // Diffraction-grating style hue shift: tilting the card sweeps the spectrum
+            float tiltPhase = R.x * 1.6 + R.y * 1.1;
+            float diag = vUv.x * 0.8 + vUv.y * 1.2;   // diagonal colour bands across the card
+            vec3 rainbow = spectralPalette(diag + tiltPhase);
+
+            // Fine foil streaks that slide as the angle changes
+            float streaks = 0.55 + 0.45 * sin((vUv.x - vUv.y) * 28.0 + tiltPhase * 6.0);
+
+            // Bright band where the foil reflects the light toward the viewer
+            float spec = pow(max(dot(R, L), 0.0), 6.0);
+            float sheen = spec * 1.8 + 0.18 + fresnel * fresnel * 1.2;
+
+            // Subtle mode: weaker overall, softer streaks, slightly desaturated
+            float strength = 1.0;
+            if (uMode == 1) {
+              strength = 0.35;
+              streaks = mix(1.0, streaks, 0.5);
+              rainbow = mix(vec3(1.0), rainbow, 0.65);
+            }
+
+            holoEffect = rainbow * sheen * streaks * strength * uIntensity;
+          }
+          // MODE 2: no effect — holoEffect stays zero, the card art shows as-is
+
+          // Blend hologram over base card art highlights (additive/screen blend)
+          vec3 finalColor = baseColor.rgb + holoEffect * holoMute * (baseColor.rgb * 0.85 + 0.15) + digitalGlow;
+
+          gl_FragColor = vec4(finalColor, fragAlpha >= 0.0 ? fragAlpha : baseColor.a);
+        }
+      `
+    };
+
+    const frontMaterial = new THREE.ShaderMaterial({
+      uniforms: foilCustomShader.uniforms,
+      vertexShader: foilCustomShader.vertexShader,
+      fragmentShader: foilCustomShader.fragmentShader,
+      transparent: true,   // lets the code-rain background be see-through
+      side: THREE.FrontSide
+    });
+
+    // Back uses the same foil shader as the front. It shares time, intensity
+    // and light, but has its own texture and its own effect mode, so the
+    // front and back effects are controlled separately.
+    const backUniforms = Object.assign({}, foilCustomShader.uniforms, {
+      tDiffuse: { value: backTexture },
+      uMode: { value: 2 },   // back starts with no effect
+      tNext: { value: null },
+      uTrans: { value: 0.0 },
+      uTransType: { value: 0 }
+    });
+    const backMaterial = new THREE.ShaderMaterial({
+      uniforms: backUniforms,
+      vertexShader: foilCustomShader.vertexShader,
+      fragmentShader: foilCustomShader.fragmentShader,
+      side: THREE.FrontSide
+    });
+
+    // ---------- Back image gallery: backs/a1 … backs/a8 next to this page ----------
+    const BACK_FOLDER = 'backs/';
+    const BACK_EXTS = ['jpg', 'png', 'jpeg', 'webp'];
+    const backGallery = Array.from({ length: 8 }, (_, i) => ({ name: 'a' + (i + 1), url: null, texture: null, missing: false }));
+    let currentBackIndex = 0;
+    const backGrid = document.getElementById('back-grid');
+    const backCounter = document.getElementById('back-counter');
+
+    // Find whichever extension exists for a1…a8 (a5.png, a3.jpg, …)
+    function resolveBackUrl(entry) {
+      if (entry.url) return Promise.resolve(entry.url);
+      return new Promise((resolve, reject) => {
+        let k = 0;
+        const tryNext = () => {
+          if (k >= BACK_EXTS.length) { entry.missing = true; reject(); return; }
+          const url = BACK_FOLDER + entry.name + '.' + BACK_EXTS[k++];
+          const img = new Image();
+          img.onload = () => { entry.url = url; resolve(url); };
+          img.onerror = tryNext;
+          img.src = url;
+        };
+        tryNext();
+      });
+    }
+
+    function renderBackGallery() {
+      backGrid.innerHTML = '';
+      backGallery.forEach((entry, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'thumb' + (i === currentBackIndex ? ' active' : '');
+        cell.title = entry.name;
+        if (entry.url) {
+          const img = document.createElement('img');
+          img.src = entry.url;
+          img.alt = entry.name;
+          img.draggable = false;
+          cell.appendChild(img);
+        } else {
+          cell.innerHTML = `<div class="w-full h-full flex items-center justify-center text-[10px] text-slate-500">${entry.missing ? '缺 ' + entry.name : entry.name}</div>`;
+        }
+        cell.addEventListener('click', () => { showBack(i); Sound.tick(); });
+        backGrid.appendChild(cell);
+      });
+      backCounter.textContent = currentBackIndex >= 0 ? `${currentBackIndex + 1} / ${backGallery.length}` : `自訂 / ${backGallery.length}`;
+    }
+
+    function showBack(i) {
+      currentBackIndex = i;
+      const entry = backGallery[i];
+      if (entry.texture) {
+        backUniforms.tDiffuse.value = entry.texture;
+      } else {
+        resolveBackUrl(entry).then((url) => {
+          textureLoader.load(url, (tex) => {
+            entry.texture = prepareTexture(tex);
+            if (currentBackIndex === i) backUniforms.tDiffuse.value = entry.texture;
+          });
+        }).catch(() => {});
+      }
+      renderBackGallery();
+    }
+
+    // Find all eight files, fill in the thumbnails as they're found, then show a1
+    backGallery.forEach((entry) => resolveBackUrl(entry).catch(() => {}).finally(renderBackGallery));
+    showBack(0);
+
+    // Dark card stock edge
+    const edgeMaterial = new THREE.MeshStandardMaterial({
+      color: 0x181a20,
+      roughness: 0.8,
+      metalness: 0.05
+    });
+
+    // Standard Pokémon card dimensions: 2.5 x 3.5 inches
+    const cardWidth = 2.5;
+    const cardHeight = 3.5;
+    const cardThickness = 0.02;
+
+    // Real cards have ~3 mm corners on a 63 mm width (≈4.8% of the width),
+    // which matches the rounded corners in the card artwork.
+    const cornerRadius = cardWidth * 0.048;
+
+    // Rounded-rectangle outline centred on the origin
+    function createRoundedRectShape(w, h, r) {
+      const x = -w / 2, y = -h / 2;
+      const s = new THREE.Shape();
+      s.moveTo(x + r, y);
+      s.lineTo(x + w - r, y);
+      s.quadraticCurveTo(x + w, y, x + w, y + r);
+      s.lineTo(x + w, y + h - r);
+      s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      s.lineTo(x + r, y + h);
+      s.quadraticCurveTo(x, y + h, x, y + h - r);
+      s.lineTo(x, y + r);
+      s.quadraticCurveTo(x, y, x + r, y);
+      return s;
+    }
+
+    const cardShape = createRoundedRectShape(cardWidth, cardHeight, cornerRadius);
+    const curveSegments = 16;
+
+    // Flat face with UVs remapped so the full image spans the card (0..1)
+    function createFaceGeometry() {
+      const geo = new THREE.ShapeGeometry(cardShape, curveSegments);
+      const pos = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < pos.count; i++) {
+        uv.setXY(i, pos.getX(i) / cardWidth + 0.5, pos.getY(i) / cardHeight + 0.5);
+      }
+      uv.needsUpdate = true;
+      return geo;
+    }
+
+    // Front face (+Z)
+    const frontMesh = new THREE.Mesh(createFaceGeometry(), frontMaterial);
+    frontMesh.position.z = cardThickness / 2;
+
+    // Back face (-Z): same face turned around, so the back art reads correctly from behind
+    const backMesh = new THREE.Mesh(createFaceGeometry(), backMaterial);
+    backMesh.rotation.y = Math.PI;
+    backMesh.position.z = -cardThickness / 2;
+
+    // Rounded edge band: extrude the outline, show only the sides (caps hidden)
+    const edgeGeometry = new THREE.ExtrudeGeometry(cardShape, {
+      depth: cardThickness,
+      bevelEnabled: false,
+      curveSegments: curveSegments
+    });
+    edgeGeometry.translate(0, 0, -cardThickness / 2);
+    const hiddenCapMaterial = new THREE.MeshBasicMaterial({ visible: false });
+    const edgeMesh = new THREE.Mesh(edgeGeometry, [hiddenCapMaterial, edgeMaterial]);
+
+    // cardMesh is a group so the hover tilt in animate() still applies to the whole card
+    const cardMesh = new THREE.Group();
+    cardMesh.add(frontMesh, backMesh, edgeMesh);
+
+    // flipPivot is used only by the "翻牌換圖" transition, independent of drag and hover tilt
+    const flipPivot = new THREE.Group();
+    flipPivot.add(cardMesh);
+
+    const cardGroup = new THREE.Group();
+    cardGroup.add(flipPivot);
+    scene.add(cardGroup);
+
+    // ---------- "閃光爆發" effects: halo, shockwave rings, sparks and glowing orbs ----------
+    function makeGlowTexture(size, stops) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = size;
+      const ctx = cv.getContext('2d');
+      const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      stops.forEach(([pos, col]) => g.addColorStop(pos, col));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+      return new THREE.CanvasTexture(cv);
+    }
+
+    const dotTexture = makeGlowTexture(64, [
+      [0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,240,190,0.9)'],
+      [0.6, 'rgba(255,200,90,0.25)'], [1, 'rgba(255,180,60,0)']
+    ]);
+    const haloTexture = makeGlowTexture(256, [
+      [0, 'rgba(255,250,230,1)'], [0.35, 'rgba(255,220,130,0.55)'],
+      [0.7, 'rgba(255,190,70,0.15)'], [1, 'rgba(255,170,40,0)']
+    ]);
+    const ringTexture = makeGlowTexture(256, [
+      [0, 'rgba(255,220,120,0)'], [0.72, 'rgba(255,220,120,0)'],
+      [0.86, 'rgba(255,248,220,0.95)'], [0.93, 'rgba(255,205,100,0.45)'], [1, 'rgba(255,190,80,0)']
+    ]);
+
+    function makeFxSprite(tex) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending
+      }));
+      sp.visible = false;
+      return sp;
+    }
+
+    // Glow behind the card — only its outer part shows around the edges
+    const haloSprite = makeFxSprite(haloTexture);
+    haloSprite.position.z = -0.05;
+    cardMesh.add(haloSprite);
+
+    // Two staggered shockwave rings expanding beyond the card
+    const ringSprites = [makeFxSprite(ringTexture), makeFxSprite(ringTexture)];
+    ringSprites.forEach(r => { r.position.z = -0.03; cardMesh.add(r); });
+
+    function makeParticleSystem(count, size) {
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(count * 3);
+      const col = new Float32Array(count * 3);
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const mat = new THREE.PointsMaterial({
+        size, map: dotTexture, vertexColors: true, transparent: true, opacity: 0,
+        depthWrite: false, blending: THREE.AdditiveBlending
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.visible = false;
+      pts.frustumCulled = false;
+      cardMesh.add(pts);
+      return { pts, geo, mat, pos, col, vel: new Float32Array(count * 3), count };
+    }
+
+    const sparks = makeParticleSystem(280, 0.07); // fast fine sparks
+    const orbs = makeParticleSystem(70, 0.2);     // slow, larger glowing motes
+
+    // Random point on the card outline with its outward direction
+    function randomEdgePoint() {
+      const hw = cardWidth / 2, hh = cardHeight / 2;
+      const perim = 2 * (cardWidth + cardHeight);
+      let t = Math.random() * perim;
+      if (t < cardWidth) return { x: -hw + t, y: hh, nx: 0, ny: 1 };
+      t -= cardWidth;
+      if (t < cardHeight) return { x: hw, y: hh - t, nx: 1, ny: 0 };
+      t -= cardHeight;
+      if (t < cardWidth) return { x: hw - t, y: -hh, nx: 0, ny: -1 };
+      t -= cardWidth;
+      return { x: -hw, y: -hh + t, nx: -1, ny: 0 };
+    }
+
+    function seedParticles(sys, speedMin, speedMax, fromEdge) {
+      for (let i = 0; i < sys.count; i++) {
+        let x, y, dx, dy;
+        if (fromEdge) {
+          const e = randomEdgePoint();
+          x = e.x; y = e.y;
+          // Mostly outward, spread a little along the edge and away from the centre
+          dx = e.nx + (Math.random() - 0.5) * 0.9 + x * 0.25;
+          dy = e.ny + (Math.random() - 0.5) * 0.9 + y * 0.25;
+        } else {
+          const a = Math.random() * Math.PI * 2;
+          const r = Math.random() * 0.6;
+          x = Math.cos(a) * r; y = Math.sin(a) * r * 1.4;
+          dx = Math.cos(a); dy = Math.sin(a);
+        }
+        const len = Math.hypot(dx, dy) || 1;
+        const speed = speedMin + Math.random() * (speedMax - speedMin);
+        sys.pos[i * 3] = x;
+        sys.pos[i * 3 + 1] = y;
+        sys.pos[i * 3 + 2] = (Math.random() - 0.3) * 0.15;
+        sys.vel[i * 3] = (dx / len) * speed;
+        sys.vel[i * 3 + 1] = (dy / len) * speed;
+        sys.vel[i * 3 + 2] = (Math.random() - 0.3) * speed * 0.4;
+        // White → warm gold colour mix
+        const w = Math.random();
+        sys.col[i * 3] = 1.0;
+        sys.col[i * 3 + 1] = 0.78 + 0.22 * w;
+        sys.col[i * 3 + 2] = 0.35 + 0.6 * w;
+      }
+      sys.geo.attributes.position.needsUpdate = true;
+      sys.geo.attributes.color.needsUpdate = true;
+      sys.pts.visible = true;
+    }
+
+    let burstState = null;
+    const BURST_MS = 1700;
+
+    function startBurst() {
+      seedParticles(sparks, 2.2, 5.5, true);
+      seedParticles(orbs, 0.5, 1.6, true);
+      // A few orbs from the centre as well, so the burst feels like it comes from the card
+      for (let i = 0; i < 18; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 0.8 + Math.random() * 1.4;
+        orbs.pos[i * 3] = 0; orbs.pos[i * 3 + 1] = 0; orbs.pos[i * 3 + 2] = 0.08;
+        orbs.vel[i * 3] = Math.cos(a) * sp; orbs.vel[i * 3 + 1] = Math.sin(a) * sp * 1.3;
+      }
+      haloSprite.visible = true;
+      ringSprites.forEach(r => { r.visible = true; });
+      burstState = { start: performance.now(), last: performance.now() };
+    }
+
+    function stepParticles(sys, dt, drag, rise, elapsed) {
+      const k = Math.pow(drag, dt * 60);
+      for (let i = 0; i < sys.count; i++) {
+        sys.vel[i * 3] *= k;
+        sys.vel[i * 3 + 1] = sys.vel[i * 3 + 1] * k + rise * dt;
+        sys.vel[i * 3 + 2] *= k;
+        sys.pos[i * 3] += sys.vel[i * 3] * dt + Math.sin(elapsed * 6 + i) * 0.002;
+        sys.pos[i * 3 + 1] += sys.vel[i * 3 + 1] * dt;
+        sys.pos[i * 3 + 2] += sys.vel[i * 3 + 2] * dt;
+      }
+      sys.geo.attributes.position.needsUpdate = true;
+    }
+
+    function updateBurst() {
+      if (!burstState) return;
+      const now = performance.now();
+      const dt = Math.min((now - burstState.last) / 1000, 0.05);
+      burstState.last = now;
+      const t = (now - burstState.start) / BURST_MS;
+
+      if (t >= 1) {
+        [sparks, orbs].forEach(sys => { sys.pts.visible = false; });
+        haloSprite.visible = false;
+        ringSprites.forEach(r => { r.visible = false; });
+        burstState = null;
+        return;
+      }
+
+      // Particles: sparks fly out fast and fade; orbs drift and float up, lingering longer
+      stepParticles(sparks, dt, 0.955, 0, t);
+      stepParticles(orbs, dt, 0.975, 0.35, t);
+      sparks.mat.opacity = Math.pow(1 - t, 1.4) * (0.8 + 0.2 * Math.sin(now * 0.05));
+      orbs.mat.opacity = Math.min(t * 8, 1) * Math.pow(1 - t, 0.8) * 0.85;
+      sparks.mat.size = 0.07 * (1 - t * 0.5);
+
+      // Halo: quick bloom then fade, gently pulsing
+      const haloIn = Math.min(t / 0.1, 1);
+      haloSprite.material.opacity = haloIn * Math.pow(1 - t, 2) * (0.9 + 0.1 * Math.sin(now * 0.03));
+      const hs = 1 + t * 0.35;
+      haloSprite.scale.set(cardWidth * 2.6 * hs, cardHeight * 2.1 * hs, 1);
+
+      // Shockwave rings, the second one slightly later
+      ringSprites.forEach((r, i) => {
+        const rt = Math.max(0, (t - i * 0.14) / 0.75);
+        if (rt <= 0 || rt >= 1) { r.material.opacity = 0; return; }
+        const size = 2.8 + rt * 8.5;
+        r.scale.set(size, size, 1);
+        r.material.opacity = Math.pow(1 - rt, 1.5) * (i === 0 ? 0.95 : 0.6);
+      });
+    }
+
+    // ---------- "全像掃光" laser etch: glowing beam line + sparks thrown off the line ----------
+    const beamTexture = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 256; cv.height = 32;
+      const ctx = cv.getContext('2d');
+      const gv = ctx.createLinearGradient(0, 0, 0, 32);
+      gv.addColorStop(0, 'rgba(255,255,255,0)');
+      gv.addColorStop(0.5, 'rgba(255,255,255,1)');
+      gv.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = gv;
+      ctx.fillRect(0, 0, 256, 32);
+      // fade the ends so the beam tapers past the card edges
+      ctx.globalCompositeOperation = 'destination-in';
+      const gh = ctx.createLinearGradient(0, 0, 256, 0);
+      gh.addColorStop(0, 'rgba(0,0,0,0)');
+      gh.addColorStop(0.12, 'rgba(0,0,0,1)');
+      gh.addColorStop(0.88, 'rgba(0,0,0,1)');
+      gh.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gh;
+      ctx.fillRect(0, 0, 256, 32);
+      return new THREE.CanvasTexture(cv);
+    })();
+
+    const beamMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(cardWidth * 1.35, 0.14),
+      new THREE.MeshBasicMaterial({
+        map: beamTexture, color: 0xfff3dc, transparent: true, opacity: 0,
+        depthWrite: false, blending: THREE.AdditiveBlending
+      })
+    );
+    beamMesh.position.z = 0.03;
+    beamMesh.visible = false;
+    cardMesh.add(beamMesh);
+
+    // Bright head that rides the laser line
+    const laserHead = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: dotTexture, color: 0xffffff, transparent: true, opacity: 0,
+      depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    laserHead.position.z = 0.05;
+    laserHead.visible = false;
+    cardMesh.add(laserHead);
+
+    // Laser head path: sweeps left↔right several times while the line moves down
+    const LASER_PASSES = 7;
+    function laserHeadU(trans) {
+      const phase = trans * LASER_PASSES;
+      return 0.02 + Math.abs((phase % 1) * 2 - 1) * 0.96;   // triangle wave across the card
+    }
+    let lastHeadX = null;
+
+    const SPARK_POOL = 3200;
+    const laserGeo = new THREE.BufferGeometry();
+    const laserPos = new Float32Array(SPARK_POOL * 3);
+    const laserAlpha = new Float32Array(SPARK_POOL);     // per-spark opacity (0 = gone)
+    const laserSize = new Float32Array(SPARK_POOL);      // per-spark size
+    const laserVel = new Float32Array(SPARK_POOL * 3);
+    const laserLife = new Float32Array(SPARK_POOL);      // seconds left
+    const laserMaxLife = new Float32Array(SPARK_POOL);
+    const laserBright = new Float32Array(SPARK_POOL);    // birth brightness
+    const laserSizeBase = new Float32Array(SPARK_POOL);  // birth size (mixed big and small)
+    laserGeo.setAttribute('position', new THREE.BufferAttribute(laserPos, 3));
+    laserGeo.setAttribute('aAlpha', new THREE.BufferAttribute(laserAlpha, 1));
+    laserGeo.setAttribute('aSize', new THREE.BufferAttribute(laserSize, 1));
+
+    // White sparks that fade by opacity (not by darkening), so a fading spark
+    // never turns into a grey dot over the transparent canvas.
+    const laserMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uMap: { value: dotTexture },
+        uScale: { value: 400 }
+      },
+      vertexShader: `
+        attribute float aAlpha;
+        attribute float aSize;
+        uniform float uScale;
+        varying float vAlpha;
+        void main() {
+          vAlpha = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aAlpha > 0.0 ? aSize * uScale / -mv.z : 0.0;
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uMap;
+        varying float vAlpha;
+        void main() {
+          // Fuller, brighter dot: lift the soft falloff so the core reads solid white
+          float a = clamp(pow(texture2D(uMap, gl_PointCoord).a, 0.55) * vAlpha * 1.3, 0.0, 1.0);
+          if (a < 0.01) discard;
+          gl_FragColor = vec4(1.0, 1.0, 1.0, a);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending
+    });
+    const laserSparks = new THREE.Points(laserGeo, laserMaterial);
+    laserSparks.frustumCulled = false;
+    laserSparks.visible = false;
+    cardMesh.add(laserSparks);
+    let laserCursor = 0;
+    let laserAlive = 0;
+    let laserLast = performance.now();
+
+    function emitLaserSpark(x, y, headVx = 0) {
+      const i = laserCursor;
+      laserCursor = (laserCursor + 1) % SPARK_POOL;
+      laserPos[i * 3] = x;
+      laserPos[i * 3 + 1] = y;
+      laserPos[i * 3 + 2] = 0.03;
+      // Kicked up off the surface and sideways, then pulled down by gravity
+      // Wider spray: some sparks shoot far, most stay closer to the line
+      const power = 0.5 + Math.pow(Math.random(), 1.5) * 1.5;
+      // Thrown out in all directions, with a trailing push opposite to the head's travel
+      laserVel[i * 3] = (Math.random() - 0.5) * 6.5 * power - headVx * 0.18;
+      laserVel[i * 3 + 1] = (0.8 + Math.random() * 3.6) * power;
+      laserVel[i * 3 + 2] = (0.5 + Math.random() * 2.6) * power;
+      const life = 0.9 + Math.random() * 0.9;          // linger, then fade out slowly
+      laserLife[i] = laserMaxLife[i] = life;
+      // White, with slight brightness / size variation
+      laserBright[i] = 0.9 + Math.random() * 0.1;
+      laserAlpha[i] = laserBright[i];
+      // Mostly medium sparks with some much bigger ones
+      laserSizeBase[i] = 0.07 + Math.pow(Math.random(), 2.0) * 0.23;
+      laserSize[i] = laserSizeBase[i];
+    }
+
+    function updateLaser() {
+      const now = performance.now();
+      const dt = Math.min((now - laserLast) / 1000, 0.05);
+      laserLast = now;
+
+      // Where is the laser line right now?
+      const tr = frontTransition;
+      const sweeping = tr && tr.type === 'sweep';
+      let lineVisible = false;
+      if (sweeping) {
+        const bandY = 1.15 - foilCustomShader.uniforms.uTrans.value * 1.3;  // same as the shader
+        if (bandY > -0.02 && bandY < 1.02) {
+          lineVisible = true;
+          const y = (bandY - 0.5) * cardHeight;
+          beamMesh.position.y = y;
+          beamMesh.material.opacity = 0.55 + 0.25 * Math.random();          // flicker
+          beamMesh.scale.y = 0.8 + Math.random() * 0.5;
+
+          // Laser head position along its back-and-forth path
+          const u = laserHeadU(foilCustomShader.uniforms.uTrans.value);
+          foilCustomShader.uniforms.uLaserX.value = u;
+          const hx = (u - 0.5) * cardWidth;
+          const headVx = lastHeadX === null ? 0 : (hx - lastHeadX) / Math.max(dt, 0.001);
+          laserHead.visible = true;
+          laserHead.position.set(hx, y, 0.05);
+          const hs = 0.45 + Math.random() * 0.2;
+          laserHead.scale.set(hs, hs, 1);
+          laserHead.material.opacity = 0.85 + 0.15 * Math.random();
+
+          // Sparks pour out of the head, filling in along the path it just travelled
+          const n = 18 + Math.floor(Math.random() * 10);
+          const fromX = lastHeadX === null ? hx : lastHeadX;
+          for (let k = 0; k < n; k++) {
+            const t = Math.random();
+            const px = fromX + (hx - fromX) * t + (Math.random() - 0.5) * 0.08;
+            emitLaserSpark(px, y + (Math.random() - 0.5) * 0.03, headVx);
+          }
+          // A few faint ones elsewhere on the line so it still looks hot
+          if (Math.random() < 0.5) emitLaserSpark((Math.random() - 0.5) * cardWidth * 0.98, y, 0);
+          lastHeadX = hx;
+          laserAlive = 1;
+        }
+      }
+      beamMesh.visible = lineVisible;
+      if (!lineVisible) { laserHead.visible = false; lastHeadX = null; }
+
+      if (!laserAlive) return;
+      laserSparks.visible = true;
+      laserMaterial.uniforms.uScale.value = renderer.getPixelRatio() * window.innerHeight * 0.5;
+      let any = false;
+      for (let i = 0; i < SPARK_POOL; i++) {
+        if (laserLife[i] <= 0) { laserAlpha[i] = 0; continue; }   // gone completely, nothing drawn
+        any = true;
+        laserLife[i] -= dt;
+        laserVel[i * 3 + 1] -= 4.0 * dt;               // gentler gravity so they drift as they fade
+        laserVel[i * 3] *= 0.98;
+        laserVel[i * 3 + 2] *= 0.98;
+        laserPos[i * 3] += laserVel[i * 3] * dt;
+        laserPos[i * 3 + 1] += laserVel[i * 3 + 1] * dt;
+        laserPos[i * 3 + 2] += laserVel[i * 3 + 2] * dt;
+        // Stay white; fade to transparent and shrink a little as it dies
+        const f = Math.max(laserLife[i] / laserMaxLife[i], 0);
+        laserAlpha[i] = laserBright[i] * Math.pow(f, 1.3);
+        laserSize[i] = laserSizeBase[i] * (0.5 + 0.5 * f);
+      }
+      laserGeo.attributes.position.needsUpdate = true;
+      laserGeo.attributes.aAlpha.needsUpdate = true;
+      laserGeo.attributes.aSize.needsUpdate = true;
+      if (!any && !lineVisible) { laserAlive = 0; laserSparks.visible = false; }
+    }
+
+
+    let isDragging = false;
+    let previousPointerPosition = { x: 0, y: 0 };
+    let rotationVelocity = { x: 0, y: 0 };
+    let autoRotate = false;
+    const friction = 0.94; // Inertia dampening
+
+    // Mouse tilt effect when hovering (tactile physics)
+    let hoverTiltX = 0;
+    let hoverTiltY = 0;
+
+    const rotationIndicator = document.getElementById('rotation-indicator');
+
+    function onPointerDown(e) {
+      isDragging = true;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      previousPointerPosition = { x: clientX, y: clientY };
+      rotationVelocity = { x: 0, y: 0 };
+    }
+
+    function onPointerMove(e) {
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+      // Update foil light coordinate
+      const ndcX = clientX / window.innerWidth;
+      const ndcY = 1.0 - (clientY / window.innerHeight);
+      foilCustomShader.uniforms.uMouse.value.set(ndcX, ndcY);
+
+      if (isDragging) {
+        const deltaX = clientX - previousPointerPosition.x;
+        const deltaY = clientY - previousPointerPosition.y;
+
+        const rotSpeed = 0.0075;
+        rotationVelocity.y = deltaX * rotSpeed;
+        rotationVelocity.x = deltaY * rotSpeed;
+
+        cardGroup.rotation.y += rotationVelocity.y;
+        cardGroup.rotation.x += rotationVelocity.x;
+
+        previousPointerPosition = { x: clientX, y: clientY };
+      } else {
+        // Tilt on hover: the side under the pointer dips away from the viewer,
+        // which changes the foil angle (and therefore the rainbow colours)
+        const normX = (clientX / window.innerWidth) * 2 - 1;
+        const normY = -(clientY / window.innerHeight) * 2 + 1;
+        hoverTiltX = -normY * 0.35;
+        hoverTiltY = normX * 0.45;
+      }
+    }
+
+    function onPointerUp() {
+      isDragging = false;
+    }
+
+    container.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
+
+    container.addEventListener('touchstart', onPointerDown, { passive: true });
+    window.addEventListener('touchmove', onPointerMove, { passive: true });
+    window.addEventListener('touchend', onPointerUp);
+
+    // Zooming with mouse wheel
+    window.addEventListener('wheel', (e) => {
+      // Scrolling inside a panel (e.g. the thumbnail list) shouldn't zoom the card
+      if (e.target.closest && e.target.closest('.glass-panel')) return;
+      camera.position.z += e.deltaY * 0.004;
+      camera.position.z = Math.min(Math.max(camera.position.z, 3.8), 11.0);
+    }, { passive: true });
+
+    const btnFlip = document.getElementById('btn-flip');
+    const btnAutoRotate = document.getElementById('btn-autorotate');
+    const btnReset = document.getElementById('btn-reset');
+    const autoRotateIcon = document.getElementById('autorotate-icon');
+    const autoRotateLabel = document.getElementById('autorotate-label');
+
+    // Smooth Flip 180°
+    let isFlipping = false;
+    let flipStartTime = 0;
+    let flipStartAngle = 0;
+    let flipTargetAngle = 0;
+
+    btnFlip.addEventListener('click', () => {
+      isFlipping = true;
+      flipStartTime = performance.now();
+      flipStartAngle = cardGroup.rotation.y;
+      flipTargetAngle = cardGroup.rotation.y + Math.PI; // 180 degrees
+      rotationVelocity = { x: 0, y: 0 };
+      Sound.swish();
+    });
+
+    // Auto rotate toggle
+    btnAutoRotate.addEventListener('click', () => {
+      autoRotate = !autoRotate;
+      Sound.toggle(autoRotate);
+      if (autoRotate) {
+        autoRotateIcon.className = 'fa-solid fa-pause text-amber-400';
+        autoRotateLabel.textContent = '暫停旋轉';
+      } else {
+        autoRotateIcon.className = 'fa-solid fa-play text-amber-400';
+        autoRotateLabel.textContent = '自動旋轉';
+      }
+    });
+
+    // Reset to front view
+    btnReset.addEventListener('click', () => {
+      isFlipping = false;
+      isSpinning = false;
+      cardGroup.position.z = 0;
+      cardGroup.rotation.set(0, 0, 0);
+      rotationVelocity = { x: 0, y: 0 };
+      Sound.tick();
+    });
+
+    // High-speed spin that returns to the current position
+    const SPIN_TURNS = 5;
+    const SPIN_MS = 1500;          // the fast turns
+    const SPIN_SETTLE_MS = 1100;   // overshoot and rock back into place
+
+    // Spin progress 0 → 1 (whole spin) at time T seconds, with overshoot and rock-back
+    function spinProgressAt(T) {
+      const TS = SPIN_MS / 1000, TW = SPIN_SETTLE_MS / 1000;
+      const A = 0.017;
+      if (T < TS) {
+        const s = T / TS, s2 = s * s, s3 = s2 * s;
+        const m1 = A * 3.75 * Math.PI / TW * TS;
+        return (-2 * s3 + 3 * s2) + (s3 - s2) * m1;
+      }
+      const t = Math.min((T - TS) / TW, 1);
+      const theta = 3 * Math.PI * (1.25 * t - 0.25 * t * t);
+      return 1 + A * Math.exp(-1.6 * t) * (1 - t * t) * Math.sin(theta);
+    }
+    let isSpinning = false;
+    let spinStartTime = 0;
+    let spinStartAngle = 0;
+    document.getElementById('btn-spin').addEventListener('click', () => {
+      if (isSpinning) return;
+      isFlipping = false;
+      rotationVelocity = { x: 0, y: 0 };
+      spinStartAngle = cardGroup.rotation.y;
+      spinStartTime = performance.now();
+      isSpinning = true;
+      Sound.spin(SPIN_TURNS, SPIN_MS, SPIN_SETTLE_MS, spinProgressAt);
+    });
+
+    // Reset to back view (card turned 180°, upright)
+    document.getElementById('btn-reset-back').addEventListener('click', () => {
+      isFlipping = false;
+      isSpinning = false;
+      cardGroup.position.z = 0;
+      cardGroup.rotation.set(0, Math.PI, 0);
+      rotationVelocity = { x: 0, y: 0 };
+      Sound.tick();
+    });
+
+    // Hologram mode selectors — one group for the front, one for the back
+    const modeValues = { rainbow: 0, subtle: 1, none: 2 };
+    const activeClasses = ['bg-gradient-to-r', 'from-amber-500', 'to-yellow-500', 'text-slate-950', 'shadow-md', 'shadow-amber-500/30'];
+
+    document.querySelectorAll('.holo-group').forEach(group => {
+      const target = group.dataset.target === 'back' ? backUniforms : foilCustomShader.uniforms;
+      const buttons = group.querySelectorAll('.holo-mode-btn');
+
+      buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          buttons.forEach(b => {
+            b.classList.remove(...activeClasses);
+            b.classList.add('glass-btn', 'text-slate-300');
+          });
+          btn.classList.remove('glass-btn', 'text-slate-300');
+          btn.classList.add(...activeClasses);
+
+          target.uMode.value = modeValues[btn.dataset.mode];
+          Sound.tick();
+        });
+      });
+    });
+
+    // ---------- Sound toggle ----------
+    const soundBtn = document.getElementById('btn-sound');
+    const soundIcon = document.getElementById('sound-icon');
+    function renderSoundButton() {
+      soundIcon.className = Sound.enabled
+        ? 'fa-solid fa-volume-high text-emerald-400'
+        : 'fa-solid fa-volume-xmark text-slate-400';
+    }
+    soundBtn.addEventListener('click', () => {
+      Sound.setEnabled(!Sound.enabled);
+      renderSoundButton();
+      if (Sound.enabled) Sound.toggle(true);
+      soundBtn.blur();
+    });
+    renderSoundButton();
+
+    // ---------- Background music ----------
+    // Plays bgm.mp3 from the same folder as this page, looped, with soft fades.
+    // If bgm.mp3 isn't there, the music button lets you pick an audio file instead.
+    const BGM_VOLUME = 0.35;
+    const bgm = new Audio('bgm.mp3');
+    bgm.loop = true;
+    bgm.preload = 'auto';
+    bgm.volume = 0;
+    let bgmMissing = false;
+    let musicOn = true;
+    try { musicOn = localStorage.getItem('cardShowcaseMusic') !== 'off'; } catch (e) {}
+
+    const musicBtn = document.getElementById('btn-music');
+    const musicIcon = document.getElementById('music-icon');
+    const musicLabel = document.getElementById('music-label');
+    const musicInput = document.getElementById('input-music');
+
+    let fadeTimer = null;
+    function fadeBgm(target, ms, done) {
+      clearInterval(fadeTimer);
+      const from = bgm.volume, start = performance.now();
+      fadeTimer = setInterval(() => {
+        const k = Math.min((performance.now() - start) / ms, 1);
+        bgm.volume = Math.max(0, Math.min(1, from + (target - from) * k));
+        if (k >= 1) { clearInterval(fadeTimer); if (done) done(); }
+      }, 30);
+    }
+
+    function renderMusicButton() {
+      if (bgmMissing) {
+        musicIcon.className = 'fa-solid fa-folder-open text-violet-400';
+        musicLabel.textContent = '選擇音樂';
+        musicBtn.title = '找不到 bgm.mp3，按此選擇音樂檔';
+      } else {
+        musicIcon.className = musicOn ? 'fa-solid fa-music text-violet-400' : 'fa-solid fa-music text-slate-500';
+        musicLabel.textContent = musicOn ? '音樂' : '音樂 關';
+        musicBtn.title = '背景音樂 (B)';
+      }
+    }
+
+    function startMusic() {
+      if (bgmMissing || !musicOn) return;
+      const p = bgm.play();
+      if (p && p.then) p.then(() => fadeBgm(BGM_VOLUME, 1500)).catch(() => {});
+      else fadeBgm(BGM_VOLUME, 1500);
+    }
+    function stopMusic() {
+      fadeBgm(0, 600, () => bgm.pause());
+    }
+    function setMusic(on) {
+      musicOn = on;
+      try { localStorage.setItem('cardShowcaseMusic', on ? 'on' : 'off'); } catch (e) {}
+      on ? startMusic() : stopMusic();
+      renderMusicButton();
+    }
+
+    bgm.addEventListener('error', () => { bgmMissing = true; renderMusicButton(); });
+    let musicUnlockedAt = 0;
+    musicBtn.addEventListener('click', () => {
+      if (bgmMissing) musicInput.click();
+      // If this very click is what just started the music, don't immediately toggle it off
+      else if (performance.now() - musicUnlockedAt > 600) setMusic(!musicOn);
+      musicBtn.blur();
+    });
+    musicInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      bgm.src = URL.createObjectURL(file);
+      bgmMissing = false;
+      setMusic(true);
+      e.target.value = '';
+    });
+
+    // Browsers block autoplay with sound: start on the first click or key press
+    ['pointerdown', 'keydown'].forEach(ev =>
+      window.addEventListener(ev, () => {
+        if (musicOn && bgm.paused && !bgmMissing) { musicUnlockedAt = performance.now(); startMusic(); }
+      }, { once: true, capture: true }));
+    renderMusicButton();
+
+    // ---------- Hide / show UI ----------
+    // The button in the bottom-left slides every other control out to its edge, and back.
+    const btnToggleUi = document.getElementById('btn-toggle-ui');
+    const toggleUiIcon = document.getElementById('toggle-ui-icon');
+    const toggleUiLabel = document.getElementById('toggle-ui-label');
+    let uiHidden = false;
+
+    function setUiHidden(hidden) {
+      uiHidden = hidden;
+      document.body.classList.toggle('ui-hidden', hidden);
+      toggleUiIcon.className = (hidden ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash') + ' text-amber-400 w-4';
+      toggleUiLabel.textContent = hidden ? '顯示介面' : '隱藏介面';
+      if (hidden) bgPopover.classList.add('hidden');
+    }
+
+    btnToggleUi.addEventListener('click', () => {
+      setUiHidden(!uiHidden);
+      Sound.toggle(!uiHidden);
+      btnToggleUi.blur();
+    });
+    // Keyboard shortcuts: Q flip · W auto-rotate · E high-speed spin · R front reset · T back reset · H hide UI
+    const SHORTCUTS = { q: 'btn-flip', w: 'btn-autorotate', e: 'btn-spin', r: 'btn-reset', t: 'btn-reset-back' };
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+      const key = e.key.toLowerCase();
+      if (key === 'h') { setUiHidden(!uiHidden); Sound.toggle(!uiHidden); return; }
+      if (key === 'm') { soundBtn.click(); return; }
+      if (key === 'b') { musicBtn.click(); return; }
+      const id = SHORTCUTS[key];
+      if (id) {
+        e.preventDefault();
+        document.getElementById(id).click();
+      }
+    });
+
+    // Background colour: the chosen colour lights the centre and fades to near-black
+    const bgPresets = ['#181528', '#0f172a', '#1e3a5f', '#14532d', '#4c0519', '#3b2a0a',
+                       '#312e81', '#164e63', '#581c87', '#000000', '#374151', '#f1f5f9'];
+    const bgButton = document.getElementById('btn-bg');
+    const bgPopover = document.getElementById('bg-popover');
+    const bgSwatch = document.getElementById('bg-swatch');
+    const bgInput = document.getElementById('input-bg');
+    const bgPresetGrid = document.getElementById('bg-presets');
+
+    function mixWithBlack(hex, amount) {
+      const n = parseInt(hex.slice(1), 16);
+      const f = 1 - amount;
+      const r = Math.round(((n >> 16) & 255) * f);
+      const g = Math.round(((n >> 8) & 255) * f);
+      const b = Math.round((n & 255) * f);
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    function applyBackground(hex) {
+      document.body.style.background =
+        `radial-gradient(circle at 50% 45%, ${hex} 0%, ${mixWithBlack(hex, 0.45)} 60%, ${mixWithBlack(hex, 0.8)} 100%)`;
+      bgSwatch.style.background = hex;
+      bgInput.value = hex;
+      try { localStorage.setItem('cardShowcaseBg', hex); } catch (e) {}
+    }
+
+    bgPresets.forEach(hex => {
+      const dot = document.createElement('button');
+      dot.type = 'button';
+      dot.title = hex;
+      dot.className = 'w-6 h-6 rounded-full border border-white/30 hover:scale-110 transition-transform';
+      dot.style.background = hex;
+      dot.addEventListener('click', () => applyBackground(hex));
+      bgPresetGrid.appendChild(dot);
+    });
+
+    bgInput.addEventListener('input', (e) => applyBackground(e.target.value));
+
+    bgButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      bgPopover.classList.toggle('hidden');
+    });
+    bgPopover.addEventListener('mousedown', (e) => e.stopPropagation());
+    document.addEventListener('click', (e) => {
+      if (!bgPopover.contains(e.target) && e.target !== bgButton) bgPopover.classList.add('hidden');
+    });
+
+    try {
+      const savedBg = localStorage.getItem('cardShowcaseBg');
+      if (savedBg) applyBackground(savedBg);
+    } catch (e) {}
+
+    // Custom image uploading for front and back
+    // "更換正面" now adds to the front gallery too (multiple files allowed)
+    document.getElementById('input-front').addEventListener('change', (e) => {
+      addFrontFiles(e.target.files);
+      e.target.value = '';
+    });
+
+    document.getElementById('input-back').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const img = new Image();
+          img.src = ev.target.result;
+          img.onload = () => {
+            const newTex = new THREE.Texture(img);
+            newTex.needsUpdate = true;
+            backUniforms.tDiffuse.value = newTex;
+            currentBackIndex = -1;
+            renderBackGallery();
+          };
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    // Window Resize Handler
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------- Snowfall over the whole scene ----------
+    // Flakes fall and sway on the GPU; some drift in front of the card, some behind it.
+    const SNOW_COUNT = 900;
+    const SNOW_TOP = 7, SNOW_SPAN = 14;
+    const snowGeo = new THREE.BufferGeometry();
+    const snowPos = new Float32Array(SNOW_COUNT * 3);
+    const snowSpeed = new Float32Array(SNOW_COUNT);
+    const snowPhase = new Float32Array(SNOW_COUNT);
+    const snowSize = new Float32Array(SNOW_COUNT);
+    const snowAlpha = new Float32Array(SNOW_COUNT);
+    for (let i = 0; i < SNOW_COUNT; i++) {
+      snowPos[i * 3] = (Math.random() - 0.5) * 26;
+      snowPos[i * 3 + 1] = Math.random() * SNOW_SPAN - SNOW_SPAN / 2;
+      snowPos[i * 3 + 2] = -7 + Math.random() * 11;          // z from -7 (far) to 4 (near)
+      const near = (snowPos[i * 3 + 2] + 7) / 11;            // 0 far … 1 near
+      snowSpeed[i] = 0.35 + Math.random() * 0.45 + near * 0.3;
+      snowPhase[i] = Math.random() * Math.PI * 2;
+      snowSize[i] = 0.04 + Math.pow(Math.random(), 2.5) * 0.12;
+      snowAlpha[i] = 0.45 + Math.random() * 0.5;
+    }
+    snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+    snowGeo.setAttribute('aSpeed', new THREE.BufferAttribute(snowSpeed, 1));
+    snowGeo.setAttribute('aPhase', new THREE.BufferAttribute(snowPhase, 1));
+    snowGeo.setAttribute('aSize', new THREE.BufferAttribute(snowSize, 1));
+    snowGeo.setAttribute('aAlpha', new THREE.BufferAttribute(snowAlpha, 1));
+
+    const snowMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uScale: { value: 400 },
+        uTop: { value: SNOW_TOP },
+        uSpan: { value: SNOW_SPAN }
+      },
+      vertexShader: `
+        attribute float aSpeed;
+        attribute float aPhase;
+        attribute float aSize;
+        attribute float aAlpha;
+        uniform float uTime;
+        uniform float uScale;
+        uniform float uTop;
+        uniform float uSpan;
+        varying float vAlpha;
+        void main() {
+          vec3 p = position;
+          // Fall and wrap around top-to-bottom
+          p.y = uTop - mod(uTop - p.y + uTime * aSpeed, uSpan);
+          // Gentle side-to-side drift, plus a slow breeze
+          p.x += sin(uTime * (0.6 + aSpeed * 0.5) + aPhase) * 0.35 + sin(uTime * 0.15 + aPhase * 0.3) * 0.6;
+          p.z += cos(uTime * 0.5 + aPhase) * 0.15;
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          // Skip flakes behind the camera (when zoomed in) and cap very close ones
+          gl_PointSize = -mv.z > 0.3 ? min(aSize * uScale / -mv.z, 48.0) : 0.0;
+          gl_Position = projectionMatrix * mv;
+          // Fade near the top and bottom of the wrap so flakes never pop in or out
+          float edge = smoothstep(uTop, uTop - 1.0, p.y) * smoothstep(uTop - uSpan, uTop - uSpan + 1.0, p.y);
+          vAlpha = aAlpha * edge;
+        }
+      `,
+      fragmentShader: `
+        varying float vAlpha;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          float a = smoothstep(0.5, 0.1, d) * vAlpha;   // soft round flake
+          if (a < 0.01) discard;
+          gl_FragColor = vec4(1.0, 1.0, 1.0, a);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending
+    });
+    const snow = new THREE.Points(snowGeo, snowMaterial);
+    snow.frustumCulled = false;
+    scene.add(snow);
+
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const elapsedTime = clock.getElapsedTime();
+      foilCustomShader.uniforms.uTime.value = elapsedTime;
+
+      // High-speed spin: several full turns, overshoots its landing, rocks back and settles
+      // exactly where it started
+      if (isSpinning) {
+        const T = (performance.now() - spinStartTime) / 1000;
+        const TS = SPIN_MS / 1000, TW = SPIN_SETTLE_MS / 1000;
+        const k = spinProgressAt(T);
+        cardGroup.rotation.y = spinStartAngle + k * SPIN_TURNS * Math.PI * 2;
+        cardGroup.position.z = Math.sin(Math.min(T / TS, 1) * Math.PI) * 0.6;   // lifts mid-spin
+        if (T >= TS + TW) {
+          cardGroup.rotation.y = spinStartAngle;                      // exact original orientation
+          cardGroup.position.z = 0;
+          isSpinning = false;
+        }
+      }
+
+      // Handle Flip Animation
+      if (isFlipping) {
+        const progress = Math.min((performance.now() - flipStartTime) / 600, 1.0);
+        const ease = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+        cardGroup.rotation.y = flipStartAngle + (flipTargetAngle - flipStartAngle) * ease;
+        if (progress >= 1.0) isFlipping = false;
+      }
+
+      // Handle Drag Inertia, Auto-Rotation, or Hover Tilt
+      if (!isDragging && !isFlipping && !isSpinning) {
+        if (autoRotate) {
+          cardGroup.rotation.y += 0.016;
+          cardGroup.rotation.x = Math.sin(elapsedTime * 1.5) * 0.12;
+        } else {
+          // Apply angular momentum
+          cardGroup.rotation.y += rotationVelocity.y;
+          cardGroup.rotation.x += rotationVelocity.x;
+          rotationVelocity.x *= friction;
+          rotationVelocity.y *= friction;
+
+          // Gentle breathing float
+          cardGroup.position.y = Math.sin(elapsedTime * 2.0) * 0.04;
+        }
+      }
+
+      // Hover tilt lives on the inner mesh so it layers on top of drag/flip rotation.
+      // Eases back to flat while dragging, flipping or auto-rotating.
+      const tiltActive = !isDragging && !isFlipping && !autoRotate && !isSpinning;
+      const targetTiltX = tiltActive ? hoverTiltX : 0;
+      const targetTiltY = tiltActive ? hoverTiltY : 0;
+      cardMesh.rotation.x += (targetTiltX - cardMesh.rotation.x) * 0.08;
+      cardMesh.rotation.y += (targetTiltY - cardMesh.rotation.y) * 0.08;
+
+      updateFrontTransition();
+      updateBurst();
+      updateLaser();
+
+      // Snow
+      snowMaterial.uniforms.uTime.value = elapsedTime;
+      snowMaterial.uniforms.uScale.value = renderer.getPixelRatio() * window.innerHeight * 0.5;
+
+
+      // Degree readout
+      let degrees = Math.round(((cardGroup.rotation.y % (Math.PI * 2)) / (Math.PI * 2)) * 360);
+      if (degrees < 0) degrees += 360;
+      if (rotationIndicator) {
+        rotationIndicator.textContent = `旋轉: ${degrees}°`;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    window.onload = function () {
+      animate();
+    };
+  </script>
+</body>
+</html>

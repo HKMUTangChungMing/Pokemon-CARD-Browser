@@ -1,0 +1,7 @@
+在本頁開啟CMD，接著輸入
+
+python -m http.server 8000
+
+打開瀏覽器 輸入 
+
+http://localhost:8000/pokemon.html
